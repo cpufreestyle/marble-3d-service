@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marble 3D - 中文提示词转3D世界</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #888;
+            font-size: 1.1rem;
+        }
+        
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+        
+        @media (max-width: 768px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .card h2 {
+            font-size: 1.3rem;
+            margin-bottom: 20px;
+            color: #00d2ff;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #aaa;
+            font-size: 0.9rem;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            font-size: 1rem;
+            resize: vertical;
+            min-height: 120px;
+        }
+        
+        textarea:focus {
+            outline: none;
+            border-color: #00d2ff;
+        }
+        
+        textarea::placeholder {
+            color: #666;
+        }
+        
+        .file-upload {
+            border: 2px dashed rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .file-upload:hover {
+            border-color: #00d2ff;
+            background: rgba(0, 210, 255, 0.1);
+        }
+        
+        .file-upload input {
+            display: none;
+        }
+        
+        .file-upload-icon {
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+        
+        .file-upload-text {
+            color: #888;
+        }
+        
+        .preview-image {
+            max-width: 100%;
+            max-height: 200px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
+            color: #fff;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 210, 255, 0.3);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            margin-top: 10px;
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .result-area {
+            min-height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .result-placeholder {
+            text-align: center;
+            color: #666;
+        }
+        
+        .result-content {
+            width: 100%;
+        }
+        
+        .result-preview {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #000;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        
+        .result-preview img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        
+        .result-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .result-actions .btn {
+            flex: 1;
+            padding: 12px;
+            font-size: 0.9rem;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px;
+            background: rgba(0, 210, 255, 0.1);
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #00d2ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .gallery {
+            margin-top: 40px;
+        }
+        
+        .gallery h2 {
+            margin-bottom: 20px;
+        }
+        
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .gallery-item {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .gallery-item:hover {
+            transform: translateY(-5px);
+        }
+        
+        .gallery-item img {
+            width: 100%;
+            aspect-ratio: 16/9;
+            object-fit: cover;
+        }
+        
+        .gallery-item-info {
+            padding: 15px;
+        }
+        
+        .gallery-item-info p {
+            font-size: 0.9rem;
+            color: #aaa;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 210, 255, 0.9);
+            color: #000;
+            padding: 15px 25px;
+            border-radius: 8px;
+            font-weight: 500;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+        }
+        
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        footer {
+            text-align: center;
+            margin-top: 60px;
+            padding: 20px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎲 Marble 3D 世界生成器</h1>
+            <p class="subtitle">用中文描述你的想象，我来帮你生成 3D 世界</p>
+        </header>
+        
+        <div class="main-grid">
+            <!-- 输入区域 -->
+            <div class="card">
+                <h2>📝 创建你的 3D 世界</h2>
+                
+                <div class="form-group">
+                    <label>中文提示词</label>
+                    <textarea id="prompt" placeholder="例如：一只可爱的橘猫坐在阳光明媚的窗台上，窗外是的城市 skyline..."></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>或上传图片（可选）</label>
+                    <div class="file-upload" onclick="document.getElementById('imageInput').click()">
+                        <div class="file-upload-icon">📁</div>
+                        <div class="file-upload-text">点击上传图片</div>
+                        <input type="file" id="imageInput" accept="image/*">
+                    </div>
+                    <img id="previewImage" class="preview-image" alt="Preview">
+                </div>
+                
+                <button class="btn" id="generateBtn" onclick="generateWorld()">
+                    🚀 开始生成
+                </button>
+                
+                <button class="btn btn-secondary" onclick="clearForm()">
+                    🗑️ 清空
+                </button>
+            </div>
+            
+            <!-- 结果区域 -->
+            <div class="card">
+                <h2>🎮 3D 世界预览</h2>
+                <div class="result-area" id="resultArea">
+                    <div class="result-placeholder">
+                        <p>👆 在左侧输入描述，点击生成按钮</p>
+                        <p>你的 3D 世界将在这里展示</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 示例画廊 -->
+        <div class="gallery">
+            <h2>💡 示例作品</h2>
+            <div class="gallery-grid" id="galleryGrid">
+                <div class="gallery-item" onclick="loadExample('一个温馨的咖啡馆，柔和的灯光，窗外下雨')">
+                    <div class="result-preview" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                        <span>☕</span>
+                    </div>
+                    <div class="gallery-item-info">
+                        <p>温馨咖啡馆</p>
+                    </div>
+                </div>
+                <div class="gallery-item" onclick="loadExample('未来科幻城市，霓虹灯闪烁')">
+                    <div class="result-preview" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                        <span>🌃</span>
+                    </div>
+                    <div class="gallery-item-info">
+                        <p>未来科幻城市</p>
+                    </div>
+                </div>
+                <div class="gallery-item" onclick="loadExample('宁静的日本庭院，樱花盛开')">
+                    <div class="result-preview" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                        <span>🌸</span>
+                    </div>
+                    <div class="gallery-item-info">
+                        <p>日本庭院</p>
+                    </div>
+                </div>
+                <div class="gallery-item" onclick="loadExample('魔法森林，小精灵在飞舞')">
+                    <div class="result-preview" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+                        <span>🌲</span>
+                    </div>
+                    <div class="gallery-item-info">
+                        <p>魔法森林</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>Powered by World Labs API | © 2026 Marble 3D Service</p>
+        </footer>
+    </div>
+    
+    <div class="toast" id="toast"></div>
+    
+    <script>
+        const API_BASE = window.location.origin + '/api';
+        let currentTaskId = null;
+        let pollInterval = null;
+        
+        // 图片预览
+        document.getElementById('imageInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('previewImage').src = e.target.result;
+                    document.getElementById('previewImage').style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+        
+        // 加载示例
+        function loadExample(text) {
+            document.getElementById('prompt').value = text;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        
+        // 清空表单
+        function clearForm() {
+            document.getElementById('prompt').value = '';
+            document.getElementById('imageInput').value = '';
+            document.getElementById('previewImage').style.display = 'none';
+            document.getElementById('previewImage').src = '';
+        }
+        
+        // 显示提示
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+        
+        // 显示结果
+        function showResult(result) {
+            const area = document.getElementById('resultArea');
+            area.innerHTML = `
+                <div class="result-content">
+                    <div class="result-preview">
+                        <img src="${result.preview_url || 'https://via.placeholder.com/640x360?text=3D+World'}" alt="Preview">
+                    </div>
+                    <div class="result-actions">
+                        <button class="btn" onclick="window.open('${result.world_url}', '_blank')">
+                            🌐 在新窗口打开
+                        </button>
+                        <button class="btn btn-secondary" onclick="shareResult()">
+                            📤 分享
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // 显示加载状态
+        function showLoading() {
+            const area = document.getElementById('resultArea');
+            area.innerHTML = `
+                <div class="status">
+                    <div class="spinner"></div>
+                    <span>正在生成你的 3D 世界...</span>
+                </div>
+                <p style="text-align: center; color: #666;">这可能需要几秒钟时间</p>
+            `;
+        }
+        
+        // 分享
+        function shareResult() {
+            if (navigator.share) {
+                navigator.share({
+                    title: 'Marble 3D 世界',
+                    text: '看看我创建的 3D 世界！',
+                    url: window.location.href
+                });
+            } else {
+                showToast('链接已复制到剪贴板');
+            }
+        }
+        
+        // 生成 3D 世界
+        async function generateWorld() {
+            const prompt = document.getElementById('prompt').value.trim();
+            const imageInput = document.getElementById('imageInput');
+            
+            if (!prompt && !imageInput.files[0]) {
+                showToast('请输入提示词或上传图片');
+                return;
+            }
+            
+            const btn = document.getElementById('generateBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ 生成中...';
+            
+            showLoading();
+            
+            try {
+                const formData = new FormData();
+                formData.append('prompt', prompt);
+                
+                if (imageInput.files[0]) {
+                    formData.append('image', imageInput.files[0]);
+                }
+                
+                const response = await fetch(`${API_BASE}/create`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    if (data.status === 'processing' || data.result) {
+                        // 直接返回结果
+                        showResult(data.result || {
+                            world_url: data.result?.world_url || 'https://marble.worldlabs.ai',
+                            preview_url: data.result?.preview_url
+                        });
+                        showToast('🎉 生成完成！');
+                    } else {
+                        // 需要轮询
+                        currentTaskId = data.task_id;
+                        pollStatus();
+                    }
+                } else {
+                    throw new Error(data.error || '生成失败');
+                }
+            } catch (error) {
+                document.getElementById('resultArea').innerHTML = `
+                    <div class="result-placeholder">
+                        <p style="color: #ff6b6b;">❌ 生成失败: ${error.message}</p>
+                    </div>
+                `;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🚀 开始生成';
+            }
+        }
+        
+        // 轮询状态
+        function pollStatus() {
+            if (pollInterval) clearInterval(pollInterval);
+            
+            pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/task/${currentTaskId}`);
+                    const data = await response.json();
+                    
+                    if (data.status === 'completed') {
+                        clearInterval(pollInterval);
+                        showResult(data.result);
+                        showToast('🎉 生成完成！');
+                    }
+                } catch (error) {
+                    console.error('Poll error:', error);
+                }
+            }, 3000);
+        }
+        
+        // 页面卸载时清除轮询
+        window.addEventListener('beforeunload', () => {
+            if (pollInterval) clearInterval(pollInterval);
+        });
+    </script>
+</body>
+</html>
