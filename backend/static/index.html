@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marble 3D - 中文提示词转3D世界</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #888;
+            font-size: 1.1rem;
+        }
+        
+        .main-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            align-items: start;
+        }
+        
+        @media (max-width: 900px) {
+            .main-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .card h2 {
+            font-size: 1.3rem;
+            margin-bottom: 20px;
+            color: #00d2ff;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #aaa;
+            font-size: 0.9rem;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            font-size: 1rem;
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        textarea:focus {
+            outline: none;
+            border-color: #00d2ff;
+        }
+        
+        .file-upload {
+            border: 2px dashed rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .file-upload:hover {
+            border-color: #00d2ff;
+            background: rgba(0, 210, 255, 0.1);
+        }
+        
+        .file-upload input {
+            display: none;
+        }
+        
+        .preview-image {
+            max-width: 100%;
+            max-height: 200px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
+            color: #fff;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 210, 255, 0.3);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            margin-top: 10px;
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        /* 结果区域 */
+        .result-area {
+            min-height: 400px;
+        }
+        
+        .result-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 400px;
+            color: #666;
+        }
+        
+        .result-placeholder .icon {
+            font-size: 4rem;
+            margin-bottom: 20px;
+        }
+        
+        /* 3D 全景预览 */
+        .pano-container {
+            width: 100%;
+            aspect-ratio: 2/1;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 15px;
+            position: relative;
+        }
+        
+        .pano-container iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        
+        .pano-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        /* 缩略图网格 */
+        .thumbnails {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .thumbnail {
+            aspect-ratio: 1;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        
+        .thumbnail:hover {
+            border-color: #00d2ff;
+        }
+        
+        .thumbnail.active {
+            border-color: #00d2ff;
+        }
+        
+        .thumbnail img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        /* 操作按钮 */
+        .result-actions {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+        
+        .result-actions .btn {
+            padding: 12px;
+            font-size: 0.95rem;
+        }
+        
+        .result-actions .btn-primary {
+            background: linear-gradient(135deg, #00ff88 0%, #00b894 100%);
+        }
+        
+        /* 加载状态 */
+        .loading-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 400px;
+        }
+        
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #00d2ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            color: #888;
+            font-size: 1.1rem;
+        }
+        
+        .loading-subtext {
+            color: #666;
+            font-size: 0.9rem;
+            margin-top: 10px;
+        }
+        
+        /* 画廊 */
+        .gallery {
+            margin-top: 40px;
+        }
+        
+        .gallery h2 {
+            margin-bottom: 20px;
+        }
+        
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        
+        .gallery-item {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .gallery-item:hover {
+            transform: translateY(-5px);
+        }
+        
+        .gallery-item .preview {
+            aspect-ratio: 16/9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+        }
+        
+        .gallery-item-info {
+            padding: 15px;
+        }
+        
+        .gallery-item-info p {
+            font-size: 0.9rem;
+            color: #aaa;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 210, 255, 0.9);
+            color: #000;
+            padding: 15px 25px;
+            border-radius: 8px;
+            font-weight: 500;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+        
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast.error {
+            background: rgba(255, 107, 107, 0.9);
+        }
+        
+        footer {
+            text-align: center;
+            margin-top: 60px;
+            padding: 20px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎲 Marble 3D 世界生成器</h1>
+            <p class="subtitle">用中文描述你的想象，我来帮你生成 3D 世界</p>
+        </header>
+        
+        <div class="main-layout">
+            <!-- 输入区域 -->
+            <div class="card">
+                <h2>📝 创建你的 3D 世界</h2>
+                
+                <div class="form-group">
+                    <label>中文提示词</label>
+                    <textarea id="prompt" placeholder="例如：一只可爱的橘猫坐在阳光明媚的窗台上..."></textarea>
+                </div>
+                
+                <button class="btn" id="generateBtn" onclick="generateWorld()">
+                    🚀 开始生成
+                </button>
+                
+                <button class="btn btn-secondary" onclick="clearForm()">
+                    🗑️ 清空
+                </button>
+            </div>
+            
+            <!-- 结果区域 -->
+            <div class="card">
+                <h2>🎮 3D 世界预览</h2>
+                <div class="result-area" id="resultArea">
+                    <div class="result-placeholder">
+                        <div class="icon">🌍</div>
+                        <p>在左侧输入描述，点击生成按钮</p>
+                        <p style="margin-top: 10px;">你的 3D 世界将在这里展示</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 示例画廊 -->
+        <div class="gallery">
+            <h2>💡 示例提示词（点击加载）</h2>
+            <div class="gallery-grid">
+                <div class="gallery-item" onclick="loadExample('一个温馨的咖啡馆，柔和的灯光，窗外下雨')">
+                    <div class="preview" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">☕</div>
+                    <div class="gallery-item-info"><p>温馨咖啡馆</p></div>
+                </div>
+                <div class="gallery-item" onclick="loadExample('未来科幻城市，霓虹灯闪烁')">
+                    <div class="preview" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">🌃</div>
+                    <div class="gallery-item-info"><p>未来科幻城市</p></div>
+                </div>
+                <div class="gallery-item" onclick="loadExample('宁静的日本庭院，樱花盛开')">
+                    <div class="preview" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">🌸</div>
+                    <div class="gallery-item-info"><p>日本庭院</p></div>
+                </div>
+                <div class="gallery-item" onclick="loadExample('魔法森林，小精灵在飞舞')">
+                    <div class="preview" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">🌲</div>
+                    <div class="gallery-item-info"><p>魔法森林</p></div>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>Powered by <a href="https://worldlabs.ai" target="_blank" style="color: #00d2ff;">World Labs API</a> | © 2026 Marble 3D Service</p>
+        </footer>
+    </div>
+    
+    <div class="toast" id="toast"></div>
+    
+    <script>
+        const API_BASE = window.location.origin + '/api';
+        let currentTaskId = null;
+        let currentWorldUrl = null;
+        let pollInterval = null;
+        let checkCount = 0;
+        
+        function loadExample(text) {
+            document.getElementById('prompt').value = text;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        
+        function clearForm() {
+            document.getElementById('prompt').value = '';
+            showPlaceholder();
+        }
+        
+        function showPlaceholder() {
+            document.getElementById('resultArea').innerHTML = `
+                <div class="result-placeholder">
+                    <div class="icon">🌍</div>
+                    <p>在左侧输入描述，点击生成按钮</p>
+                    <p style="margin-top: 10px;">你的 3D 世界将在这里展示</p>
+                </div>
+            `;
+        }
+        
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 4000);
+        }
+        
+        function showLoading() {
+            document.getElementById('resultArea').innerHTML = `
+                <div class="loading-container">
+                    <div class="spinner"></div>
+                    <div class="loading-text">正在生成你的 3D 世界...</div>
+                    <div class="loading-subtext">预计需要 30 秒 ~ 5 分钟</div>
+                </div>
+            `;
+        }
+        
+        function showResult(data) {
+            console.log('Result data:', data);  // 调试用
+            
+            const area = document.getElementById('resultArea');
+            currentWorldUrl = data.world_url || data.pano_url;
+            
+            // 获取预览图 URL（多个字段兼容）
+            const previewUrl = data.preview_url || data.thumbnail_url || data.pano_url;
+            
+            let thumbnailHtml = '';
+            if (previewUrl) {
+                thumbnailHtml = `<img src="${previewUrl}" alt="Preview" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none'">`;
+            }
+            
+            let actionButtons = '';
+            if (data.world_url) {
+                actionButtons += `<button class="btn btn-primary" onclick="window.open('${data.world_url}', '_blank')">
+                    🌐 在 Marble 中打开
+                </button>`;
+            }
+            if (data.pano_url) {
+                actionButtons += `<button class="btn btn-secondary" onclick="window.open('${data.pano_url}', '_blank')">
+                    🖼️ 查看全景图
+                </button>`;
+            }
+            if (data.spz_full || data.spz_500k || data.mesh_url) {
+                const downloadUrl = data.spz_full || data.spz_500k || data.mesh_url;
+                actionButtons += `<button class="btn btn-secondary" onclick="window.open('${downloadUrl}', '_blank')">
+                    ⬇️ 下载 3D 模型
+                </button>`;
+            }
+            actionButtons += `<button class="btn btn-secondary" onclick="copyLink()">
+                📋 复制链接
+            </button>`;
+            
+            area.innerHTML = `
+                <div class="pano-container" style="background:#000;">
+                    ${thumbnailHtml || '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;">生成中...</div>'}
+                </div>
+                
+                <div style="margin-top:15px;padding:10px;background:rgba(255,255,255,0.05);border-radius:8px;">
+                    <p style="color:#aaa;font-size:0.9rem;margin-bottom:10px;">${data.caption || '3D 世界已生成'}</p>
+                </div>
+                
+                <div class="result-actions" style="margin-top:15px;">
+                    ${actionButtons}
+                </div>
+            `;
+        }
+        
+        function showError(message) {
+            document.getElementById('resultArea').innerHTML = `
+                <div class="result-placeholder" style="color: #ff6b6b;">
+                    <div class="icon">❌</div>
+                    <p>生成失败</p>
+                    <p style="margin-top: 10px; font-size: 0.9rem;">${message}</p>
+                </div>
+            `;
+        }
+        
+        function copyLink() {
+            if (currentWorldUrl) {
+                navigator.clipboard.writeText(currentWorldUrl).then(() => {
+                    showToast('链接已复制到剪贴板');
+                });
+            }
+        }
+        
+        async function generateWorld() {
+            const prompt = document.getElementById('prompt').value.trim();
+            
+            if (!prompt) {
+                showToast('请输入提示词', true);
+                return;
+            }
+            
+            const btn = document.getElementById('generateBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ 生成中...';
+            
+            showLoading();
+            checkCount = 0;
+            
+            try {
+                const response = await fetch(`${API_BASE}/create`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({prompt: prompt})
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    if (data.status === 'completed' && data.result) {
+                        showResult(data.result);
+                        showToast('🎉 生成完成！');
+                    } else {
+                        currentTaskId = data.task_id;
+                        startPolling();
+                    }
+                } else {
+                    throw new Error(data.error || '未知错误');
+                }
+            } catch (error) {
+                showError(error.message);
+                showToast('生成失败: ' + error.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🚀 开始生成';
+            }
+        }
+        
+        function startPolling() {
+            if (pollInterval) clearInterval(pollInterval);
+            
+            pollInterval = setInterval(async () => {
+                checkCount++;
+                
+                try {
+                    const response = await fetch(`${API_BASE}/task/${currentTaskId}`);
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        if (data.status === 'completed') {
+                            clearInterval(pollInterval);
+                            showResult(data.result);
+                            showToast('🎉 生成完成！');
+                        } else if (checkCount > 60) {
+                            // 超时 3 分钟
+                            clearInterval(pollInterval);
+                            showError('生成超时，请稍后重试');
+                        } else {
+                            // 继续等待
+                            const progress = data.progress || '生成中...';
+                            document.getElementById('resultArea').innerHTML = `
+                                <div class="loading-container">
+                                    <div class="spinner"></div>
+                                    <div class="loading-text">${progress}</div>
+                                    <div class="loading-subtext">已等待 ${checkCount * 3} 秒...</div>
+                                </div>
+                            `;
+                        }
+                    } else {
+                        clearInterval(pollInterval);
+                        showError(data.error || '获取状态失败');
+                    }
+                } catch (error) {
+                    console.error('Poll error:', error);
+                }
+            }, 3000);
+        }
+        
+        window.addEventListener('beforeunload', () => {
+            if (pollInterval) clearInterval(pollInterval);
+        });
+    </script>
+</body>
+</html>
