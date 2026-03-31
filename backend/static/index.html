@@ -327,6 +327,72 @@
             text-overflow: ellipsis;
         }
         
+        /* API Key 设置面板 */
+        .api-settings {
+            background: rgba(255, 165, 0, 0.08);
+            border: 1px solid rgba(255, 165, 0, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .api-settings h3 {
+            color: #ffa500;
+            font-size: 1rem;
+            margin-bottom: 12px;
+        }
+        
+        .api-key-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .api-key-input {
+            flex: 1;
+            padding: 10px 15px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            font-size: 0.9rem;
+            font-family: monospace;
+        }
+        
+        .api-key-input:focus {
+            outline: none;
+            border-color: #ffa500;
+        }
+        
+        .api-key-input::placeholder {
+            color: #555;
+        }
+        
+        .btn-save-key {
+            background: linear-gradient(135deg, #ffa500 0%, #ff6b00 100%);
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: transform 0.2s;
+        }
+        
+        .btn-save-key:hover {
+            transform: translateY(-1px);
+        }
+        
+        .api-status {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #888;
+        }
+        
+        .api-status.ok { color: #00ff88; }
+        .api-status.error { color: #ff6b6b; }
+
         /* Toast */
         .toast {
             position: fixed;
@@ -372,6 +438,16 @@
             <!-- 输入区域 -->
             <div class="card">
                 <h2>📝 创建你的 3D 世界</h2>
+                
+                <!-- API Key 设置 -->
+                <div class="api-settings">
+                    <h3>🔑 World Labs API Key</h3>
+                    <div class="api-key-row">
+                        <input type="password" id="apiKeyInput" class="api-key-input" placeholder="输入你的 World Labs API Key（可选）">
+                        <button class="btn-save-key" onclick="saveApiKey()">保存</button>
+                    </div>
+                    <div class="api-status" id="apiStatus">使用默认 Key 或输入你自己的 Key</div>
+                </div>
                 
                 <div class="form-group">
                     <label>中文提示词</label>
@@ -436,6 +512,37 @@
         let currentWorldUrl = null;
         let pollInterval = null;
         let checkCount = 0;
+        let userApiKey = localStorage.getItem('worldlabs_api_key') || '';
+        
+        // 页面加载时恢复 API Key
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedKey = localStorage.getItem('worldlabs_api_key');
+            if (savedKey) {
+                document.getElementById('apiKeyInput').value = savedKey;
+                document.getElementById('apiStatus').textContent = '✓ 已保存你的 API Key';
+                document.getElementById('apiStatus').className = 'api-status ok';
+                userApiKey = savedKey;
+            }
+        });
+        
+        function saveApiKey() {
+            const key = document.getElementById('apiKeyInput').value.trim();
+            const statusEl = document.getElementById('apiStatus');
+            
+            if (key) {
+                localStorage.setItem('worldlabs_api_key', key);
+                userApiKey = key;
+                statusEl.textContent = '✓ 已保存你的 API Key';
+                statusEl.className = 'api-status ok';
+                showToast('API Key 已保存');
+            } else {
+                localStorage.removeItem('worldlabs_api_key');
+                userApiKey = '';
+                statusEl.textContent = '使用默认 Key 或输入你自己的 Key';
+                statusEl.className = 'api-status';
+                showToast('已清除自定义 API Key');
+            }
+        }
         
         function loadExample(text) {
             document.getElementById('prompt').value = text;
@@ -559,10 +666,15 @@
             checkCount = 0;
             
             try {
+                const requestBody = {prompt: prompt};
+                if (userApiKey) {
+                    requestBody.api_key = userApiKey;
+                }
+                
                 const response = await fetch(`${API_BASE}/create`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({prompt: prompt})
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const data = await response.json();
@@ -594,7 +706,12 @@
                 checkCount++;
                 
                 try {
-                    const response = await fetch(`${API_BASE}/task/${currentTaskId}`);
+                    let url = `${API_BASE}/task/${currentTaskId}`;
+                    if (userApiKey) {
+                        url += `?api_key=${encodeURIComponent(userApiKey)}`;
+                    }
+                    
+                    const response = await fetch(url);
                     const data = await response.json();
                     
                     if (data.success) {

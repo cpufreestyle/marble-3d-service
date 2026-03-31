@@ -18,14 +18,20 @@ def create_world():
     """创建 3D 世界"""
     try:
         prompt = ''
+        user_api_key = ''
+        
         if request.json:
             prompt = request.json.get('prompt', '')
+            user_api_key = request.json.get('api_key', '')
         
         if not prompt:
             return jsonify({'success': False, 'error': '请输入提示词'}), 400
         
+        # 使用用户提供的 Key 或默认 Key
+        api_key = user_api_key if user_api_key else API_KEY
+        
         headers = {
-            'WLT-Api-Key': API_KEY,
+            'WLT-Api-Key': api_key,
             'Content-Type': 'application/json'
         }
         
@@ -65,7 +71,11 @@ def create_world():
 def get_task_status(task_id):
     """获取任务状态"""
     try:
-        headers = {'WLT-Api-Key': API_KEY}
+        # 从查询参数获取用户 API Key
+        user_api_key = request.args.get('api_key', '')
+        api_key = user_api_key if user_api_key else API_KEY
+        
+        headers = {'WLT-Api-Key': api_key}
         
         response = requests.get(
             f'{API_URL}/operations/{task_id}',
