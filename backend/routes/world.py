@@ -16,17 +16,39 @@ world_bp = Blueprint('world', __name__)
 API_KEY = 'sMkQvlYoTzs8YS4jJDicJD20OZDWJlKe'
 API_URL = 'https://api.worldlabs.ai/marble/v1'
 
-# 本地 LLM 配置
+# 本地 LLM 配置（手动选择）
 LM_STUDIO_URL = 'http://localhost:1234/v1'
 OLLAMA_URL = 'http://localhost:11434'
+
+# 默认 LLM 类型: 'lmstudio' | 'ollama' | 'auto'（自动检测）
+DEFAULT_LLM = os.environ.get('DEFAULT_LLM', 'auto')
 
 # 上传目录
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', 'uploads')
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
 
-def check_local_llm():
-    """检测可用的本地 LLM"""
+def get_local_llm(preferred=None):
+    """获取用户选择的本地 LLM"""
+    if preferred and preferred != 'auto':
+        # 手动选择
+        if preferred == 'lmstudio':
+            try:
+                r = requests.get(f'{LM_STUDIO_URL}/models', timeout=2)
+                if r.status_code == 200:
+                    return 'lmstudio', LM_STUDIO_URL
+            except:
+                return None, None
+        elif preferred == 'ollama':
+            try:
+                r = requests.get(f'{OLLAMA_URL}/api/tags', timeout=2)
+                if r.status_code == 200 and r.json().get('models'):
+                    return 'ollama', OLLAMA_URL
+            except:
+                return None, None
+        return None, None
+    
+    # auto 模式：按优先级检测
     # 检查 LM Studio
     try:
         r = requests.get(f'{LM_STUDIO_URL}/models', timeout=2)
@@ -46,6 +68,41 @@ def check_local_llm():
         pass
 
     return None, None
+
+
+def check_local_llm():
+    """检测可用的本地 LLM（兼容旧接口）"""
+    return get_local_llm()
+
+
+@world_bp.route('/llm-status', methods=['GET'])
+def get_llm_status():
+    """获取本地 LLM 状态"""
+    status = {'lmstudio': False, 'ollama': False}
+    
+    # 检查 LM Studio
+    try:
+        r = requests.get(f'{LM_STUDIO_URL}/models', timeout=2)
+        if r.status_code == 200:
+            models = r.json().get('data', [])
+            status['lmstudio'] = {'available': True, 'models': [m.get('id') for m in models]}
+    except:
+        pass
+
+    # 检查 Ollama
+    try:
+        r = requests.get(f'{OLLAMA_URL}/api/tags', timeout=2)
+        if r.status_code == 200:
+            data = r.json()
+            status['ollama'] = {'available': True, 'models': [m.get('name') for m in data.get('models', [])]}
+    except:
+        pass
+
+    return jsonify({
+        'success': True,
+        'default': DEFAULT_LLM,
+        'status': status
+    })
 
 
 def enhance_prompt_with_local_llm(prompt, llm_type, llm_url):
@@ -84,7 +141,7 @@ def enhance_prompt_with_local_llm(prompt, llm_type, llm_url):
             response = requests.post(
                 f'{llm_url}/api/generate',
                 json={
-                    'model': 'qwen2.5:7b',
+                    'model': 'mistral:7b',  # 使用已安装的模型
                     'prompt': f"{system_prompt}\n\n输入: {prompt}\n输出:",
                     'stream': False
                 },
@@ -97,24 +154,6 @@ def enhance_prompt_with_local_llm(prompt, llm_type, llm_url):
         print(f"[WARN] 本地 LLM 调用失败: {e}")
 
     return None
-
-
-@world_bp.route('/llm-status', methods=['GET'])
-def get_llm_status():
-    """获取本地 LLM 状态"""
-    llm_type, llm_url = check_local_llm()
-    if llm_type:
-        return jsonify({
-            'success': True,
-            'available': True,
-            'type': llm_type,
-            'url': llm_url
-        })
-    return jsonify({
-        'success': True,
-        'available': False,
-        'message': '未检测到本地 LLM。请在 LM Studio 启动 Local Server (端口 1234) 或运行 Ollama。'
-    })
 
 
 @world_bp.route('/upload-image', methods=['POST'])
@@ -160,12 +199,14 @@ def create_world():
         user_api_key = ''
         use_local_llm = True
         image_url = None
+        llm_type = DEFAULT_LLM  # 默认 LLM 选择
 
         # 支持 multipart/form-data 或 application/json
         if request.content_type and 'multipart/form-data' in request.content_type:
             prompt = request.form.get('prompt', '')
             user_api_key = request.form.get('api_key', '')
             use_local_llm = request.form.get('use_local_llm', 'true').lower() == 'true'
+            llm_type = request.form.get('llm_type', DEFAULT_LLM)  # 新增：手动选择 LLM
             image_file = request.files.get('image')
 
             if image_file and image_file.filename:
@@ -182,6 +223,7 @@ def create_world():
             prompt = request.json.get('prompt', '')
             user_api_key = request.json.get('api_key', '')
             use_local_llm = request.json.get('use_local_llm', True)
+            llm_type = request.json.get('llm_type', DEFAULT_LLM)  # 新增：手动选择 LLM
             image_url = request.json.get('image_url')
 
         if not prompt and not image_url:
@@ -195,7 +237,8 @@ def create_world():
         llm_used = None
 
         if use_local_llm and prompt:
-            llm_type, llm_url = check_local_llm()
+            # 使用手动选择的 LLM 或自动检测
+            llm_type, llm_url = get_local_llm(llm_type)
             if llm_type:
                 enhanced = enhance_prompt_with_local_llm(prompt, llm_type, llm_url)
                 if enhanced:
