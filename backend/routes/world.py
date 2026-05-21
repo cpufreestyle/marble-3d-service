@@ -6,6 +6,7 @@ World Labs API 路由 - 支持提示词优化 + 图片上传
 from flask import Blueprint, request, jsonify, send_from_directory
 import os
 import requests
+import requests.exceptions
 import uuid
 import base64
 from pathlib import Path
@@ -13,7 +14,7 @@ from pathlib import Path
 world_bp = Blueprint('world', __name__)
 
 # World Labs API 配置
-API_KEY = 'sMkQvlYoTzs8YS4jJDicJD20OZDWJlKe'
+API_KEY = os.environ.get('WORLD_LABS_API_KEY', '')
 API_URL = 'https://api.worldlabs.ai/marble/v1'
 
 # 本地 LLM 配置（手动选择）
@@ -54,7 +55,7 @@ def get_local_llm(preferred=None):
         r = requests.get(f'{LM_STUDIO_URL}/models', timeout=2)
         if r.status_code == 200:
             return 'lmstudio', LM_STUDIO_URL
-    except:
+    except (requests.exceptions.RequestException, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
         pass
 
     # 检查 Ollama
@@ -64,7 +65,7 @@ def get_local_llm(preferred=None):
             data = r.json()
             if data.get('models'):
                 return 'ollama', OLLAMA_URL
-    except:
+    except (requests.exceptions.RequestException, requests.exceptions.ConnectionError, requests.exceptions.Timeout):
         pass
 
     return None, None
