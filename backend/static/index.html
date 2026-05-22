@@ -672,6 +672,38 @@
         let llmAvailable = false;
         let currentMode = 'text';
         let uploadedImageFile = null;
+        let wsSocket = null;
+        let wsConnected = false;
+
+        // ===== WebSocket 连接 =====
+        function connectWebSocket() {
+            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${location.host}`;
+
+            try {
+                wsSocket = new WebSocket(wsUrl, ['socketio']);
+
+                wsSocket.onopen = function() {
+                    console.log('[WS] Connected');
+                    wsConnected = true;
+                };
+
+                wsSocket.onclose = function() {
+                    console.log('[WS] Disconnected, reconnecting in 3s...');
+                    wsConnected = false;
+                    setTimeout(connectWebSocket, 3000);
+                };
+
+                wsSocket.onerror = function(err) {
+                    console.warn('[WS] Error:', err);
+                };
+            } catch (e) {
+                console.warn('[WS] Fallback to polling mode');
+            }
+        }
+
+        // 页面加载时连接
+        connectWebSocket();
 
         // ===== 模式切换 =====
         function switchMode(mode) {
@@ -960,6 +992,43 @@
         function startPolling() {
             if (pollInterval) clearInterval(pollInterval);
 
+            // WebSocket 实时推送（优先）
+            if (wsConnected && wsSocket) {
+                // 订阅任务进度
+                wsSocket.send(JSON.stringify({event: 'subscribe_task', data: {task_id: currentTaskId}}));
+
+                wsSocket.onmessage = function(event) {
+                    try {
+                        const msg = JSON.parse(event.data);
+
+                        if (msg.task_id && msg.task_id !== currentTaskId) return;
+
+                        if (msg.type === 'task_progress') {
+                            const pct = Math.round(msg.progress * 100);
+                            document.getElementById('resultArea').innerHTML = `
+                                <div class="loading-container">
+                                    <div class="spinner" style="border-top-color: #00ff88;"></div>
+                                    <div class="loading-text">${msg.message}</div>
+                                    <div class="loading-subtext">进度: ${pct}%</div>
+                                    <div style="margin-top:12px;width:80%;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;">
+                                        <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#00d2ff,#00ff88);border-radius:3px;transition:width 0.5s;"></div>
+                                    </div>
+                                </div>
+                            `;
+                        } else if (msg.type === 'task_completed') {
+                            wsSocket.send(JSON.stringify({event: 'unsubscribe_task', data: {task_id: currentTaskId}}));
+                            showResult(msg.result);
+                            showToast('🎉 生成完成！');
+                        } else if (msg.type === 'task_failed') {
+                            showError(msg.error || '生成失败');
+                        }
+                    } catch (e) {
+                        console.warn('[WS] Parse error:', e);
+                    }
+                };
+            }
+
+            // HTTP 轮询（fallback）
             pollInterval = setInterval(async () => {
                 checkCount++;
 
