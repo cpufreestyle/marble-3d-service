@@ -1,0 +1,23 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Build frontend
+        run: |
+          cd frontend && npm ci && npm run build && cd ..
+      - name: Copy frontend dist to backend
+        run: cp -r frontend/dist backend/static/
+      - name: Backend security audit
+        run: |
+          cd backend && npm audit --audit-level=high
+        continue-on-error: true
