@@ -4,14 +4,30 @@ World Labs API 路由 - 支持提示词优化 + 图片上传
 """
 
 from flask import Blueprint, request, jsonify, send_from_directory
+from flask_socketio import emit, join_room
 import os
 import requests
 import requests.exceptions
 import uuid
 import base64
+import threading
+import time
 from pathlib import Path
 
 world_bp = Blueprint('world', __name__)
+
+# WebSocket 推送函数（由 app.py 设置）
+_socketio_emit = None
+
+def init_socketio_emit(socketio):
+    """初始化 WebSocket 推送函数"""
+    global _socketio_emit
+    _socketio_emit = socketio.emit
+
+def ws_emit(event, data, room=None):
+    """推送 WebSocket 事件"""
+    if _socketio_emit:
+        _socketio_emit(event, data, room=room)
 
 # World Labs API 配置
 API_KEY = os.environ.get('WORLD_LABS_API_KEY', '')
@@ -237,9 +253,28 @@ def create_world():
 
         if response.status_code in [200, 201]:
             result = response.json()
+            task_id = result.get('operation_id')
+
+            # 推送 WebSocket 事件：任务已创建
+            ws_emit('task_created', {
+                'task_id': task_id,
+                'status': 'processing',
+                'original_prompt': prompt,
+                'enhanced_prompt': final_prompt if final_prompt != prompt else None,
+                'llm_used': llm_used
+            }, room=task_id)
+
+            # 启动后台线程轮询任务状态
+            poll_thread = threading.Thread(
+                target=poll_task_status,
+                args=(task_id, api_key),
+                daemon=True
+            )
+            poll_thread.start()
+
             return jsonify({
                 'success': True,
-                'task_id': result.get('operation_id'),
+                'task_id': task_id,
                 'status': 'processing',
                 'original_prompt': prompt,
                 'enhanced_prompt': final_prompt if final_prompt != prompt else None,
@@ -257,7 +292,82 @@ def create_world():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@world_bp.route('/task/<task_id>', methods=['GET'])
+def poll_task_status(task_id, api_key, max_attempts=120, interval=5):
+    """后台轮询任务状态，通过 WebSocket 实时推送进度"""
+    headers = {'WLT-Api-Key': api_key}
+
+    # 进度模拟阶段
+    stages = [
+        (0.1, '正在分析提示词...'),
+        (0.2, '正在构建场景...'),
+        (0.4, '正在生成 3D 模型...'),
+        (0.6, '正在渲染纹理...'),
+        (0.8, '正在优化场景...'),
+    ]
+
+    stage_idx = 0
+
+    for attempt in range(max_attempts):
+        time.sleep(interval)
+
+        # 推送模拟进度
+        if stage_idx < len(stages):
+            progress, message = stages[stage_idx]
+            ws_emit('task_progress', {
+                'task_id': task_id,
+                'progress': progress,
+                'message': message
+            }, room=task_id)
+            stage_idx += 1
+
+        try:
+            response = requests.get(
+                f'{API_URL}/operations/{task_id}',
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                done = result.get('done', False)
+
+                if done:
+                    world_data = result.get('response', {})
+                    assets = world_data.get('assets', {})
+                    splats = assets.get('splats', {}).get('spz_urls', {})
+                    mesh = assets.get('mesh', {})
+                    imagery = world_data.get('imagery', {})
+                    thumb = assets.get('thumbnail_url', '')
+                    pano = imagery.get('pano_url', '')
+
+                    # 推送完成事件
+                    ws_emit('task_completed', {
+                        'task_id': task_id,
+                        'progress': 1.0,
+                        'status': 'completed',
+                        'result': {
+                            'world_id': world_data.get('id', ''),
+                            'world_url': world_data.get('world_marble_url', ''),
+                            'preview_url': thumb or pano,
+                            'pano_url': pano,
+                            'thumbnail_url': thumb,
+                            'caption': assets.get('caption', ''),
+                            'spz_100k': splats.get('100k', ''),
+                            'spz_500k': splats.get('500k', ''),
+                            'spz_full': splats.get('full_res', ''),
+                            'mesh_url': mesh.get('collider_mesh_url', ''),
+                        }
+                    }, room=task_id)
+                    return
+        except Exception as e:
+            print(f'[WARN] 轮询任务 {task_id} 出错: {e}')
+            continue
+
+    # 超时
+    ws_emit('task_failed', {
+        'task_id': task_id,
+        'error': '生成超时，请重试'
+    }, room=task_id))
 def get_task_status(task_id):
     """获取任务状态"""
     try:
