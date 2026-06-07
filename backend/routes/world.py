@@ -1,28 +1,44 @@
 # -*- coding: utf-8 -*-
 """
 World Labs API 路由 - 支持提示词优化 + 图片上传
+优化版本：修复安全漏洞、语法错误，添加日志和错误处理
 """
 
 from flask import Blueprint, request, jsonify, send_from_directory
 import os
+from dotenv import load_dotenv
 import requests
 import uuid
 import base64
 from pathlib import Path
+from datetime import datetime
+import logging
+
+# 加载环境变量
+load_dotenv()
 
 world_bp = Blueprint('world', __name__)
 
 # World Labs API 配置
-API_KEY = 'sMkQvlYoTzs8YS4jJDicJD20OZDWJlKe'
+API_KEY = os.environ.get('WORLD_LABS_API_KEY')
+if not API_KEY:
+    raise ValueError("❌ 缺少 WORLD_LABS_API_KEY 环境变量。请在 .env 文件中设置。")
+
 API_URL = 'https://api.worldlabs.ai/marble/v1'
 
 # 本地 LLM 配置
-LM_STUDIO_URL = 'http://localhost:1234/v1'
-OLLAMA_URL = 'http://localhost:11434'
+LM_STUDIO_URL = os.environ.get('LM_STUDIO_URL', 'http://localhost:1234/v1')
+OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 
 # 上传目录
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', 'uploads')
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+)
 
 
 def check_local_llm():
@@ -31,9 +47,10 @@ def check_local_llm():
     try:
         r = requests.get(f'{LM_STUDIO_URL}/models', timeout=2)
         if r.status_code == 200:
+            logging.info(f"检测到 LM Studio: {LM_STUDIO_URL}")
             return 'lmstudio', LM_STUDIO_URL
-    except:
-        pass
+    except Exception as e:
+        logging.debug(f"LM Studio 检测失败: {e}")
 
     # 检查 Ollama
     try:
@@ -41,9 +58,10 @@ def check_local_llm():
         if r.status_code == 200:
             data = r.json()
             if data.get('models'):
+                logging.info(f"检测到 Ollama: {OLLAMA_URL}")
                 return 'ollama', OLLAMA_URL
-    except:
-        pass
+    except Exception as e:
+        logging.debug(f"Ollama 检测失败: {e}")
 
     return None, None
 
@@ -78,7 +96,9 @@ def enhance_prompt_with_local_llm(prompt, llm_type, llm_url):
                 timeout=30
             )
             if response.status_code == 200:
-                return response.json()['choices'][0]['message']['content']
+                enhanced = response.json()['choices'][0]['message']['content']
+                logging.info(f"LM Studio 提示词优化成功: {prompt[:50]}...")
+                return enhanced
 
         elif llm_type == 'ollama':
             response = requests.post(
@@ -91,10 +111,12 @@ def enhance_prompt_with_local_llm(prompt, llm_type, llm_url):
                 timeout=30
             )
             if response.status_code == 200:
-                return response.json().get('response', prompt)
+                enhanced = response.json().get('response', prompt)
+                logging.info(f"Ollama 提示词优化成功: {prompt[:50]}...")
+                return enhanced
 
     except Exception as e:
-        print(f"[WARN] 本地 LLM 调用失败: {e}")
+        logging.warning(f"本地 LLM 调用失败: {e}")
 
     return None
 
@@ -102,19 +124,26 @@ def enhance_prompt_with_local_llm(prompt, llm_type, llm_url):
 @world_bp.route('/llm-status', methods=['GET'])
 def get_llm_status():
     """获取本地 LLM 状态"""
-    llm_type, llm_url = check_local_llm()
-    if llm_type:
+    try:
+        llm_type, llm_url = check_local_llm()
+        if llm_type:
+            return jsonify({
+                'success': True,
+                'available': True,
+                'type': llm_type,
+                'url': llm_url
+            })
         return jsonify({
             'success': True,
-            'available': True,
-            'type': llm_type,
-            'url': llm_url
+            'available': False,
+            'message': '未检测到本地 LLM。请在 LM Studio 启动 Local Server (端口 1234) 或运行 Ollama。'
         })
-    return jsonify({
-        'success': True,
-        'available': False,
-        'message': '未检测到本地 LLM。请在 LM Studio 启动 Local Server (端口 1234) 或运行 Ollama。'
-    })
+    except Exception as e:
+        logging.error(f"检查 LLM 状态失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @world_bp.route('/upload-image', methods=['POST'])
@@ -136,6 +165,7 @@ def upload_image():
 
             # 返回可访问的 URL
             image_url = f"/uploads/{filename}"
+            logging.info(f"图片上传成功: {filename}")
             return jsonify({
                 'success': True,
                 'url': image_url,
@@ -143,6 +173,7 @@ def upload_image():
             })
 
     except Exception as e:
+        logging.error(f"图片上传失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -178,11 +209,12 @@ def create_world():
                 image_file.save(filepath)
                 image_url = f"{request.host_url}uploads/{filename}".replace('http://', 'https://')
 
-        elif request.json:
-            prompt = request.json.get('prompt', '')
-            user_api_key = request.json.get('api_key', '')
-            use_local_llm = request.json.get('use_local_llm', True)
-            image_url = request.json.get('image_url')
+        elif request.is_json:
+            data = request.get_json()
+            prompt = data.get('prompt', '')
+            user_api_key = data.get('api_key', '')
+            use_local_llm = data.get('use_local_llm', True)
+            image_url = data.get('image_url')
 
         if not prompt and not image_url:
             return jsonify({'success': False, 'error': '请输入提示词或上传图片'}), 400
@@ -201,7 +233,7 @@ def create_world():
                 if enhanced:
                     final_prompt = enhanced
                     llm_used = llm_type
-                    print(f"[INFO] 使用 {llm_type} 优化提示词: {prompt} -> {final_prompt}")
+                    logging.info(f"使用 {llm_type} 优化提示词: {prompt} -> {final_prompt}")
 
         headers = {
             'WLT-Api-Key': api_key,
@@ -227,6 +259,7 @@ def create_world():
             "world_prompt": world_prompt
         }
 
+        logging.info(f"创建 3D 世界: prompt={final_prompt[:100]}...")
         response = requests.post(
             f'{API_URL}/worlds:generate',
             headers=headers,
@@ -236,6 +269,7 @@ def create_world():
 
         if response.status_code in [200, 201]:
             result = response.json()
+            logging.info(f"任务创建成功: task_id={result.get('operation_id')}")
             return jsonify({
                 'success': True,
                 'task_id': result.get('operation_id'),
@@ -246,6 +280,7 @@ def create_world():
                 'image_url': image_url
             })
         else:
+            logging.error(f"API 错误: {response.status_code} - {response.text[:200]}")
             return jsonify({
                 'success': False,
                 'error': f'API 错误: {response.status_code}',
@@ -253,6 +288,7 @@ def create_world():
             }), response.status_code
 
     except Exception as e:
+        logging.error(f"创建世界失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -265,6 +301,7 @@ def get_task_status(task_id):
 
         headers = {'WLT-Api-Key': api_key}
 
+        logging.info(f"查询任务状态: task_id={task_id}")
         response = requests.get(
             f'{API_URL}/operations/{task_id}',
             headers=headers,
@@ -285,6 +322,7 @@ def get_task_status(task_id):
                 thumb = assets.get('thumbnail_url', '')
                 pano = imagery.get('pano_url', '')
 
+                logging.info(f"任务完成: task_id={task_id}")
                 return jsonify({
                     'success': True,
                     'status': 'completed',
@@ -308,10 +346,12 @@ def get_task_status(task_id):
                     'progress': '生成中...'
                 })
         else:
+            logging.error(f"获取状态失败: {response.status_code} - {response.text[:200]}")
             return jsonify({
                 'success': False,
                 'error': f'获取状态失败: {response.status_code}'
             }), response.status_code
 
     except Exception as e:
+        logging.error(f"查询任务状态失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500

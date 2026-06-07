@@ -4,7 +4,10 @@ Marble 3D 世界生成服务 - 后端 API
 """
 
 import os
-os.environ.setdefault('WORLD_LABS_API_KEY', 'sMkQvlYoTzs8YS4jJDicJD20OZDWJlKe')
+from dotenv import load_dotenv
+
+# 加载环境变量（从 .env 文件）
+load_dotenv()
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
