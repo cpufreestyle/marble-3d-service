@@ -1,0 +1,434 @@
+openapi: 3.0.3
+info:
+  title: Marble 3D Service API
+  description: |
+    🎲 Marble 3D Service - 用中文提示词生成 3D 世界
+    
+    基于 World Labs API 的智能 3D 场景生成服务，支持：
+    - 中文提示词输入（自动翻译成英文并优化）
+    - 图片上传生成 3D 世界
+    - 本地 LLM 支持（LM Studio / Ollama）
+  version: 1.1.0
+  contact:
+    name: Marble 3D Service Maintainers
+    url: https://github.com/cpufreestyle/marble-3d-service/issues
+
+servers:
+  - url: http://localhost:5000
+    description: 本地开发服务器
+  - url: https://your-domain.com
+    description: 生产环境
+
+tags:
+  - name: World
+    description: 3D 世界生成相关接口
+  - name: LLM
+    description: 本地 LLM 状态检测
+
+paths:
+  /api/create:
+    post:
+      tags:
+        - World
+      summary: 创建 3D 世界
+      description: |
+        创建 3D 世界（支持文字提示词或图片上传）
+        
+        **注意**：
+        - 必须提供 `prompt` 或 `image` 至少一个
+        - 如果提供 `image`，将优先使用图片生成
+        - 可通过 `use_local_llm` 参数启用本地 LLM 优化提示词
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                  description: 中文提示词（将自动翻译成英文并优化）
+                  example: "一只可爱的橘猫坐在阳光明媚的窗台上"
+                image:
+                  type: string
+                  format: binary
+                  description: 图片文件（JPG/PNG/WEBP，最大 10MB）
+                api_key:
+                  type: string
+                  description: 自定义 World Labs API Key（可选，默认使用环境变量）
+                  example: "your-api-key-here"
+                use_local_llm:
+                  type: boolean
+                  description: 是否使用本地 LLM 优化提示词
+                  default: true
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+                  description: 中文提示词
+                  example: "一只可爱的橘猫坐在阳光明媚的窗台上"
+                image_url:
+                  type: string
+                  format: url
+                  description: 图片 URL（已上传的图片链接）
+                api_key:
+                  type: string
+                  description: 自定义 API Key（可选）
+                use_local_llm:
+                  type: boolean
+                  description: 是否使用本地 LLM 优化提示词
+                  default: true
+      responses:
+        '200':
+          description: 创建成功（可能正在处理中）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  task_id:
+                    type: string
+                    description: 任务 ID（用于查询状态）
+                    example: "abc123-def456-ghi789"
+                  status:
+                    type: string
+                    enum: [processing, completed]
+                    example: "processing"
+                  original_prompt:
+                    type: string
+                    description: 原始提示词
+                    example: "一只可爱的橘猫"
+                  enhanced_prompt:
+                    type: string
+                    description: LLM 优化后的提示词（如果使用了 LLM）
+                    example: "A cute orange tabby cat..."
+                  llm_used:
+                    type: string
+                    enum: [lmstudio, ollama, null]
+                    description: 使用的 LLM 类型（如果使用了）
+                    example: "lmstudio"
+                  image_url:
+                    type: string
+                    format: url
+                    description: 上传的图片 URL（如果使用了图片）
+              example:
+                success: true
+                task_id: "abc123-def456-ghi789"
+                status: "processing"
+                original_prompt: "一只可爱的橘猫"
+                enhanced_prompt: "A cute orange tabby cat sitting on a sunlit windowsill..."
+                llm_used: "lmstudio"
+                image_url: null
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                success: false
+                error: "请输入提示词或上传图片"
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/task/{task_id}:
+    get:
+      tags:
+        - World
+      summary: 获取任务状态
+      description: |
+        查询 3D 世界生成任务的状态
+        
+        **状态说明**：
+        - `processing`: 正在生成中
+        - `completed`: 生成完成（返回结果 URL）
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 任务 ID
+          example: "abc123-def456-ghi789"
+        - name: api_key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 自定义 API Key（可选）
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/TaskProcessing'
+                  - $ref: '#/components/schemas/TaskCompleted'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/llm-status:
+    get:
+      tags:
+        - LLM
+      summary: 获取本地 LLM 状态
+      description: |
+        检测本地 LLM（LM Studio 或 Ollama）是否可用
+        
+        **检测逻辑**：
+        1. 首先检查 LM Studio（默认端口 1234）
+        2. 如果 LM Studio 不可用，检查 Ollama（默认端口 11434）
+        3. 返回第一个可用的 LLM 类型和地址
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  available:
+                    type: boolean
+                    description: 是否有可用的本地 LLM
+                    example: true
+                  type:
+                    type: string
+                    enum: [lmstudio, ollama, null]
+                    description: LLM 类型（如果可用）
+                    example: "lmstudio"
+                  url:
+                    type: string
+                    format: url
+                    description: LLM 服务地址
+                    example: "http://localhost:1234/v1"
+              examples:
+                available:
+                  summary: LLM 可用
+                  value:
+                    success: true
+                    available: true
+                    type: "lmstudio"
+                    url: "http://localhost:1234/v1"
+                not_available:
+                  summary: LLM 不可用
+                  value:
+                    success: true
+                    available: false
+                    message: "未检测到本地 LLM。请在 LM Studio 启动 Local Server (端口 1234) 或运行 Ollama。"
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/upload-image:
+    post:
+      tags:
+        - World
+      summary: 上传图片
+      description: 上传图片文件，返回可访问的 URL
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: 图片文件（JPG/PNG/WEBP，最大 16MB）
+      responses:
+        '200':
+          description: 上传成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  url:
+                    type: string
+                    format: url
+                    description: 图片 URL
+                    example: "/uploads/abc123.jpg"
+                  filename:
+                    type: string
+                    description: 文件名
+                    example: "abc123.jpg"
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: 错误信息
+          example: "请输入提示词或上传图片"
+      required:
+        - success
+        - error
+
+    TaskProcessing:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        status:
+          type: string
+          enum: [processing]
+          example: "processing"
+        progress:
+          type: string
+          description: 进度描述
+          example: "生成中..."
+      required:
+        - success
+        - status
+
+    TaskCompleted:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        status:
+          type: string
+          enum: [completed]
+          example: "completed"
+        result:
+          type: object
+          properties:
+            world_id:
+              type: string
+              description: 3D 世界 ID
+              example: "xyz789"
+            world_url:
+              type: string
+              format: url
+              description: 3D 世界交互式预览 URL
+              example: "https://marble.worldlabs.ai/world/xyz789"
+            preview_url:
+              type: string
+              format: url
+              description: 预览图 URL
+              example: "https://cdn.worldlabs.ai/preview/xyz789.jpg"
+            pano_url:
+              type: string
+              format: url
+              description: 全景图 URL
+              example: "https://cdn.worldlabs.ai/pano/xyz789.jpg"
+            thumbnail_url:
+              type: string
+              format: url
+              description: 缩略图 URL
+              example: "https://cdn.worldlabs.ai/thumb/xyz789.jpg"
+            caption:
+              type: string
+              description: 世界描述
+              example: "A cute orange tabby cat sitting on a sunlit windowsill"
+            spz_100k:
+              type: string
+              format: url
+              description: 100K 点云 URL
+            spz_500k:
+              type: string
+              format: url
+              description: 500K 点云 URL
+            spz_full:
+              type: string
+              format: url
+              description: 完整分辨率点云 URL
+            mesh_url:
+              type: string
+              format: url
+              description: 网格模型 URL
+          required:
+            - world_id
+            - world_url
+      required:
+        - success
+        - status
+        - result
+
+  examples:
+    CreateWorldRequest:
+      summary: 创建 3D 世界请求示例
+      value:
+        prompt: "一只可爱的橘猫坐在阳光明媚的窗台上"
+        use_local_llm: true
+
+    CreateWorldResponse:
+      summary: 创建 3D 世界响应示例
+      value:
+        success: true
+        task_id: "abc123-def456-ghi789"
+        status: "processing"
+        original_prompt: "一只可爱的橘猫坐在阳光明媚的窗台上"
+        enhanced_prompt: "A cute orange tabby cat sitting on a sunlit windowsill, soft morning light streaming through lace curtains..."
+        llm_used: "lmstudio"
+        image_url: null
+
+    TaskCompletedExample:
+      summary: 任务完成示例
+      value:
+        success: true
+        status: "completed"
+        result:
+          world_id: "xyz789"
+          world_url: "https://marble.worldlabs.ai/world/xyz789"
+          preview_url: "https://cdn.worldlabs.ai/preview/xyz789.jpg"
+          pano_url: "https://cdn.worldlabs.ai/pano/xyz789.jpg"
+          thumbnail_url: "https://cdn.worldlabs.ai/thumb/xyz789.jpg"
+          caption: "A cute orange tabby cat sitting on a sunlit windowsill"
+          spz_100k: "https://cdn.worldlabs.ai/spz/xyz789_100k.spz"
+          spz_500k: "https://cdn.worldlabs.ai/spz/xyz789_500k.spz"
+          spz_full: "https://cdn.worldlabs.ai/spz/xyz789_full.spz"
+          mesh_url: "https://cdn.worldlabs.ai/mesh/xyz789.obj"
+
+externalDocs:
+  description: GitHub 仓库
+  url: https://github.com/cpufreestyle/marble-3d-service

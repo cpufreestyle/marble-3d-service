@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="用中文提示词生成 3D 世界 - 基于 World Labs API">
+    <meta name="author" content="Marble 3D Service Team">
     <title>Marble 3D - 中文提示词转3D世界</title>
     <style>
         * {
@@ -186,6 +188,10 @@
             white-space: nowrap;
         }
 
+        .btn-save-key:hover {
+            opacity: 0.9;
+        }
+
         .form-group {
             margin-bottom: 15px;
         }
@@ -227,7 +233,6 @@
             cursor: pointer;
             transition: all 0.3s;
             position: relative;
-            margin-bottom: 12px;
         }
 
         .image-upload-area:hover,
@@ -289,6 +294,10 @@
             line-height: 28px;
         }
 
+        .remove-image-btn:hover {
+            background: rgba(255, 0, 0, 1);
+        }
+
         /* 优化后提示词 */
         #enhancedPromptBox {
             margin-bottom: 15px;
@@ -322,7 +331,7 @@
             transition: transform 0.2s, box-shadow 0.2s;
         }
 
-        .btn:hover {
+        .btn:hover:not(:disabled) {
             transform: translateY(-1px);
             box-shadow: 0 8px 20px rgba(0, 210, 255, 0.3);
         }
@@ -338,6 +347,10 @@
             margin-top: 8px;
             padding: 10px 20px;
             font-size: 0.85rem;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.2);
         }
 
         /* 结果区域 */
@@ -398,6 +411,10 @@
 
         .result-actions .btn-primary {
             background: linear-gradient(135deg, #00ff88 0%, #00b894 100%);
+        }
+
+        .result-actions .btn-primary:hover:not(:disabled) {
+            box-shadow: 0 8px 20px rgba(0, 255, 136, 0.3);
         }
 
         /* 加载状态 */
@@ -531,6 +548,28 @@
         .mode-content.active {
             display: block;
         }
+
+        /* 错误提示 */
+        .error-message {
+            background: rgba(255, 107, 107, 0.1);
+            border: 1px solid rgba(255, 107, 107, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 12px;
+            color: #ff6b6b;
+            font-size: 0.85rem;
+        }
+
+        /* 成功提示 */
+        .success-message {
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 12px;
+            color: #00ff88;
+            font-size: 0.85rem;
+        }
     </style>
 </head>
 <body>
@@ -546,11 +585,11 @@
                 <h2>📝 创建你的 3D 世界</h2>
 
                 <!-- 模式切换 -->
-                <div class="mode-tabs">
-                    <button class="mode-tab active" id="tabText" onclick="switchMode('text')">
+                <div class="mode-tabs" role="tablist" aria-label="生成模式">
+                    <button class="mode-tab active" id="tabText" onclick="switchMode('text')" role="tab" aria-selected="true">
                         ✏️ 文字模式
                     </button>
-                    <button class="mode-tab" id="tabImage" onclick="switchMode('image')">
+                    <button class="mode-tab" id="tabImage" onclick="switchMode('image')" role="tab" aria-selected="false">
                         🖼️ 图片模式
                     </button>
                 </div>
@@ -560,7 +599,7 @@
                     <h3>🤖 本地 AI</h3>
                     <div class="llm-status-row">
                         <span class="api-status" id="llmStatus">检测中...</span>
-                        <input type="checkbox" id="useLlmToggle" checked onchange="toggleLlm()" style="width: 16px; height: 16px; cursor: pointer;">
+                        <input type="checkbox" id="useLlmToggle" checked onchange="toggleLlm()" style="width: 16px; height: 16px; cursor: pointer;" aria-label="启用本地 AI 优化">
                     </div>
                 </div>
 
@@ -568,29 +607,29 @@
                 <div class="api-settings">
                     <h3>🔑 World Labs API Key</h3>
                     <div class="api-key-row">
-                        <input type="password" id="apiKeyInput" class="api-key-input" placeholder="输入你的 Key（可选）">
+                        <input type="password" id="apiKeyInput" class="api-key-input" placeholder="输入你的 Key（可选）" aria-label="API Key 输入">
                         <button class="btn-save-key" onclick="saveApiKey()">保存</button>
                     </div>
                 </div>
 
                 <!-- ===== 文字模式 ===== -->
-                <div class="mode-content active" id="modeText">
+                <div class="mode-content active" id="modeText" role="tabpanel" aria-labelledby="tabText">
                     <div class="form-group">
-                        <label>中文提示词</label>
-                        <textarea id="prompt" placeholder="例如：一只可爱的橘猫坐在阳光明媚的窗台上..."></textarea>
+                        <label for="prompt">中文提示词</label>
+                        <textarea id="prompt" placeholder="例如：一只可爱的橘猫坐在阳光明媚的窗台上..." aria-label="中文提示词输入"></textarea>
                     </div>
 
                     <!-- 优化后的提示词显示 -->
-                    <div id="enhancedPromptBox" style="display:none;">
+                    <div id="enhancedPromptBox" style="display:none;" aria-live="polite">
                         <div>🤖 AI 优化后的提示词</div>
                         <div id="enhancedPromptText"></div>
                     </div>
                 </div>
 
                 <!-- ===== 图片模式 ===== -->
-                <div class="mode-content" id="modeImage">
-                    <div class="image-upload-area" id="uploadArea">
-                        <input type="file" id="imageInput" accept="image/*">
+                <div class="mode-content" id="modeImage" role="tabpanel" aria-labelledby="tabImage">
+                    <div class="image-upload-area" id="uploadArea" aria-label="图片上传区域">
+                        <input type="file" id="imageInput" accept="image/*" aria-label="选择图片文件">
                         <div class="upload-icon">📷</div>
                         <div class="upload-hint">
                             点击或拖拽上传图片<br>
@@ -600,21 +639,21 @@
 
                     <!-- 图片预览 -->
                     <div id="imagePreviewBox">
-                        <img id="previewImg" alt="预览">
-                        <button class="remove-image-btn" onclick="removeImage()">×</button>
+                        <img id="previewImg" alt="图片预览">
+                        <button class="remove-image-btn" onclick="removeImage()" aria-label="移除图片">×</button>
                     </div>
 
                     <div class="form-group">
-                        <label>补充描述（可选）</label>
-                        <textarea id="imagePrompt" placeholder="描述你想要的世界，如：添加下雨效果，更温暖的色调..."></textarea>
+                        <label for="imagePrompt">补充描述（可选）</label>
+                        <textarea id="imagePrompt" placeholder="描述你想要的世界，如：添加下雨效果，更温暖的色调..." aria-label="补充描述输入"></textarea>
                     </div>
                 </div>
 
-                <button class="btn" id="generateBtn" onclick="generateWorld()">
+                <button class="btn" id="generateBtn" onclick="generateWorld()" aria-label="开始生成 3D 世界">
                     🚀 开始生成
                 </button>
 
-                <button class="btn btn-secondary" onclick="clearForm()">
+                <button class="btn btn-secondary" onclick="clearForm()" aria-label="清空表单">
                     🗑️ 清空
                 </button>
             </div>
@@ -622,7 +661,7 @@
             <!-- 结果区域 -->
             <div class="card">
                 <h2>🎮 3D 世界预览</h2>
-                <div class="result-area" id="resultArea">
+                <div class="result-area" id="resultArea" aria-live="polite">
                     <div class="result-placeholder">
                         <div class="icon">🌍</div>
                         <p>在左侧输入描述或上传图片</p>
@@ -636,19 +675,19 @@
         <div class="gallery">
             <h2>💡 示例提示词（点击加载）</h2>
             <div class="gallery-grid">
-                <div class="gallery-item" onclick="loadExample('一个温馨的咖啡馆，柔和的灯光，窗外下雨')">
+                <div class="gallery-item" onclick="loadExample('一个温馨的咖啡馆，柔和的灯光，窗外下雨')" role="button" tabindex="0" aria-label="示例：温馨咖啡馆">
                     <div class="preview" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">☕</div>
                     <div class="gallery-item-info"><p>温馨咖啡馆</p></div>
                 </div>
-                <div class="gallery-item" onclick="loadExample('未来科幻城市，霓虹灯闪烁')">
+                <div class="gallery-item" onclick="loadExample('未来科幻城市，霓虹灯闪烁')" role="button" tabindex="0" aria-label="示例：未来科幻城市">
                     <div class="preview" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">🌃</div>
                     <div class="gallery-item-info"><p>未来科幻城市</p></div>
                 </div>
-                <div class="gallery-item" onclick="loadExample('宁静的日本庭院，樱花盛开')">
+                <div class="gallery-item" onclick="loadExample('宁静的日本庭院，樱花盛开')" role="button" tabindex="0" aria-label="示例：日本庭院">
                     <div class="preview" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">🌸</div>
                     <div class="gallery-item-info"><p>日本庭院</p></div>
                 </div>
-                <div class="gallery-item" onclick="loadExample('魔法森林，小精灵在飞舞')">
+                <div class="gallery-item" onclick="loadExample('魔法森林，小精灵在飞舞')" role="button" tabindex="0" aria-label="示例：魔法森林">
                     <div class="preview" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">🌲</div>
                     <div class="gallery-item-info"><p>魔法森林</p></div>
                 </div>
@@ -660,7 +699,7 @@
         </footer>
     </div>
 
-    <div class="toast" id="toast"></div>
+    <div class="toast" id="toast" role="alert" aria-live="assertive"></div>
 
     <script>
         const API_BASE = window.location.origin + '/api';
@@ -672,6 +711,7 @@
         let llmAvailable = false;
         let currentMode = 'text';
         let uploadedImageFile = null;
+        let abortController = null;
 
         // ===== 模式切换 =====
         function switchMode(mode) {
@@ -680,6 +720,10 @@
             document.getElementById('tabImage').classList.toggle('active', mode === 'image');
             document.getElementById('modeText').classList.toggle('active', mode === 'text');
             document.getElementById('modeImage').classList.toggle('active', mode === 'image');
+            
+            // 更新 ARIA 属性
+            document.getElementById('tabText').setAttribute('aria-selected', mode === 'text');
+            document.getElementById('tabImage').setAttribute('aria-selected', mode === 'image');
         }
 
         // ===== 页面加载时初始化 =====
@@ -698,6 +742,9 @@
             const statusEl = document.getElementById('llmStatus');
             try {
                 const response = await fetch(`${API_BASE}/llm-status`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
                 const data = await response.json();
                 if (data.available) {
                     llmAvailable = true;
@@ -712,21 +759,25 @@
                 llmAvailable = false;
                 statusEl.textContent = '检测失败';
                 statusEl.className = 'api-status error';
+                console.error('LLM status check failed:', e);
             }
         }
 
-        function toggleLlm() {}
+        function toggleLlm() {
+            const useLlm = document.getElementById('useLlmToggle').checked;
+            console.log('Local LLM toggle:', useLlm);
+        }
 
         function saveApiKey() {
             const key = document.getElementById('apiKeyInput').value.trim();
             if (key) {
                 localStorage.setItem('worldlabs_api_key', key);
                 userApiKey = key;
-                showToast('API Key 已保存');
+                showToast('✅ API Key 已保存');
             } else {
                 localStorage.removeItem('worldlabs_api_key');
                 userApiKey = '';
-                showToast('已清除 API Key');
+                showToast('⚠️ 已清除 API Key');
             }
         }
 
@@ -745,32 +796,37 @@
             // 拖拽上传
             uploadArea.addEventListener('dragover', function (e) {
                 e.preventDefault();
+                e.stopPropagation();
                 uploadArea.classList.add('drag-over');
             });
 
             uploadArea.addEventListener('dragleave', function (e) {
                 e.preventDefault();
+                e.stopPropagation();
                 uploadArea.classList.remove('drag-over');
             });
 
             uploadArea.addEventListener('drop', function (e) {
                 e.preventDefault();
+                e.stopPropagation();
                 uploadArea.classList.remove('drag-over');
                 const file = e.dataTransfer.files[0];
                 if (file && file.type.startsWith('image/')) {
                     handleImageFile(file);
+                } else {
+                    showToast('⚠️ 请上传图片文件', true);
                 }
             });
         }
 
         function handleImageFile(file) {
             if (file.size > 10 * 1024 * 1024) {
-                showToast('图片不能超过 10MB', true);
+                showToast('⚠️ 图片不能超过 10MB', true);
                 return;
             }
             const ext = file.name.split('.').pop().toLowerCase();
             if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
-                showToast('只支持 JPG / PNG / WEBP 格式', true);
+                showToast('⚠️ 只支持 JPG / PNG / WEBP 格式', true);
                 return;
             }
             uploadedImageFile = file;
@@ -779,6 +835,9 @@
                 document.getElementById('previewImg').src = e.target.result;
                 document.getElementById('imagePreviewBox').style.display = 'block';
                 document.getElementById('uploadArea').style.display = 'none';
+            };
+            reader.onerror = function () {
+                showToast('⚠️ 图片读取失败', true);
             };
             reader.readAsDataURL(file);
         }
@@ -795,17 +854,21 @@
             switchMode('text');
             document.getElementById('prompt').value = text;
             window.scrollTo({ top: 0, behavior: 'smooth' });
+            showToast('📝 已加载示例提示词');
         }
 
         function clearForm() {
-            if (currentMode === 'text') {
-                document.getElementById('prompt').value = '';
-                document.getElementById('enhancedPromptBox').style.display = 'none';
-            } else {
-                removeImage();
-                document.getElementById('imagePrompt').value = '';
+            if (confirm('确定要清空所有输入吗？')) {
+                if (currentMode === 'text') {
+                    document.getElementById('prompt').value = '';
+                    document.getElementById('enhancedPromptBox').style.display = 'none';
+                } else {
+                    removeImage();
+                    document.getElementById('imagePrompt').value = '';
+                }
+                showPlaceholder();
+                showToast('🗑️ 已清空表单');
             }
-            showPlaceholder();
         }
 
         function showPlaceholder() {
@@ -875,6 +938,7 @@
                     <div class="icon">❌</div>
                     <p>生成失败</p>
                     <p style="margin-top: 8px; font-size: 0.85rem;">${message}</p>
+                    <button class="btn btn-secondary" style="margin-top: 15px;" onclick="showPlaceholder()">返回</button>
                 </div>
             `;
         }
@@ -882,7 +946,10 @@
         function copyLink() {
             if (currentWorldUrl) {
                 navigator.clipboard.writeText(currentWorldUrl).then(() => {
-                    showToast('链接已复制');
+                    showToast('✅ 链接已复制');
+                }).catch(err => {
+                    console.error('Copy failed:', err);
+                    showToast('⚠️ 复制失败，请手动复制', true);
                 });
             }
         }
@@ -895,11 +962,11 @@
                 : document.getElementById('imagePrompt').value.trim();
 
             if (mode === 'text' && !prompt) {
-                showToast('请输入提示词', true);
+                showToast('⚠️ 请输入提示词', true);
                 return;
             }
             if (mode === 'image' && !uploadedImageFile) {
-                showToast('请上传图片', true);
+                showToast('⚠️ 请上传图片', true);
                 return;
             }
 
@@ -909,6 +976,12 @@
 
             showLoading();
             checkCount = 0;
+
+            // 取消之前的请求
+            if (abortController) {
+                abortController.abort();
+            }
+            abortController = new AbortController();
 
             try {
                 const useLlm = document.getElementById('useLlmToggle').checked;
@@ -925,8 +998,13 @@
 
                 const response = await fetch(`${API_BASE}/create`, {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    signal: abortController.signal
                 });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
 
                 const data = await response.json();
 
@@ -949,8 +1027,12 @@
                     throw new Error(data.error || '未知错误');
                 }
             } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.log('Request aborted');
+                    return;
+                }
                 showError(error.message);
-                showToast('生成失败: ' + error.message, true);
+                showToast('⚠️ 生成失败: ' + error.message, true);
             } finally {
                 btn.disabled = false;
                 btn.textContent = '🚀 开始生成';
@@ -970,6 +1052,10 @@
                     }
 
                     const response = await fetch(url);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
                     const data = await response.json();
 
                     if (data.success) {
@@ -995,6 +1081,9 @@
                         showError(data.error || '获取状态失败');
                     }
                 } catch (error) {
+                    if (error.name === 'AbortError') {
+                        return;
+                    }
                     console.error('Poll error:', error);
                 }
             }, 3000);
@@ -1002,6 +1091,7 @@
 
         window.addEventListener('beforeunload', () => {
             if (pollInterval) clearInterval(pollInterval);
+            if (abortController) abortController.abort();
         });
     </script>
 </body>
