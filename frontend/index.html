@@ -1072,9 +1072,9 @@
         // ===== 核心：生成 3D 世界 =====
         async function generateWorld() {
             const mode = currentMode;
-            const prompt = mode === 'text'
-                ? document.getElementById('prompt').value.trim()
-                : document.getElementById('imagePrompt').value.trim();
+            const prompt = (mode === 'text') ?
+                document.getElementById('prompt').value.trim() :
+                document.getElementById('imagePrompt').value.trim();
 
             if (mode === 'text' && !prompt) {
                 showToast('⚠️ 请输入提示词', true);
