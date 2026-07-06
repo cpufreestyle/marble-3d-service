@@ -9,10 +9,16 @@ import os
 from dotenv import load_dotenv
 import requests
 import uuid
-import base64
 from pathlib import Path
 from datetime import datetime
 import logging
+from PIL import Image
+import asyncio
+import threading
+
+# 导入智能选择器和Stable Zero123
+from utils.smart_selector import SmartEngineSelector, GenerationEngine
+from utils.stable_3d_generator import Stable3DGenerator
 
 # 加载环境变量
 load_dotenv()
@@ -22,7 +28,7 @@ world_bp = Blueprint('world', __name__)
 # World Labs API 配置
 API_KEY = os.environ.get('WORLD_LABS_API_KEY')
 if not API_KEY:
-    raise ValueError("❌ 缺少 WORLD_LABS_API_KEY 环境变量。请在 .env 文件中设置。")
+    logging.warning("⚠️ 缺少 WORLD_LABS_API_KEY 环境变量。World Labs 引擎将不可用，请在 .env 文件中设置。")
 
 API_URL = 'https://api.worldlabs.ai/marble/v1'
 
@@ -34,11 +40,27 @@ OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', 'uploads')
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
+# 混合3D生成器初始化
+smart_selector = SmartEngineSelector()
+stable_3d_generator = Stable3DGenerator()
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
 )
+
+# 创建事件循环线程（用于处理异步操作）
+asyncio_loop = None
+
+
+def get_asyncio_loop():
+    global asyncio_loop
+    if asyncio_loop is None:
+        asyncio_loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=lambda: asyncio_loop.run_forever(), daemon=True)
+        thread.start()
+    return asyncio_loop
 
 
 def check_local_llm():
@@ -78,7 +100,9 @@ def enhance_prompt_with_local_llm(prompt, llm_type, llm_url):
 
 示例：
 输入: 一只可爱的橘猫坐在阳光明媚的窗台上
-输出: A cute orange tabby cat sitting on a sunlit windowsill, soft morning light streaming through lace curtains, warm cozy atmosphere, wooden window frame, indoor plants nearby, photorealistic, soft shadows, golden hour lighting"""
+输出: A cute orange tabby cat sitting on a sunlit windowsill, soft morning light
+streaming through lace curtains, warm cozy atmosphere, wooden window frame,
+indoor plants nearby, photorealistic, soft shadows, golden hour lighting"""
 
     try:
         if llm_type == 'lmstudio':
@@ -172,6 +196,8 @@ def upload_image():
                 'filename': filename
             })
 
+        return jsonify({'success': False, 'error': '没有有效的图片文件'}), 400
+
     except Exception as e:
         logging.error(f"图片上传失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -185,18 +211,21 @@ def serve_upload(filename):
 
 @world_bp.route('/create', methods=['POST'])
 def create_world():
-    """创建 3D 世界（支持图片上传）"""
+    """创建 3D 世界（支持智能引擎选择和图片上传）"""
     try:
+        # ========== 1. 解析请求参数 ==========
         prompt = ''
         user_api_key = ''
         use_local_llm = True
         image_url = None
+        image_file = None
+        engine_preference = 'auto'
 
-        # 支持 multipart/form-data 或 application/json
         if request.content_type and 'multipart/form-data' in request.content_type:
             prompt = request.form.get('prompt', '')
             user_api_key = request.form.get('api_key', '')
             use_local_llm = request.form.get('use_local_llm', 'true').lower() == 'true'
+            engine_preference = request.form.get('engine', 'auto')
             image_file = request.files.get('image')
 
             if image_file and image_file.filename:
@@ -207,22 +236,20 @@ def create_world():
                 filename = f"{uuid.uuid4().hex}{ext}"
                 filepath = os.path.join(UPLOAD_DIR, filename)
                 image_file.save(filepath)
-                image_url = f"{request.host_url}uploads/{filename}".replace('http://', 'https://')
+                image_url = f"{request.host_url}uploads/{filename}"
 
         elif request.is_json:
             data = request.get_json()
             prompt = data.get('prompt', '')
             user_api_key = data.get('api_key', '')
             use_local_llm = data.get('use_local_llm', True)
+            engine_preference = data.get('engine', 'auto')
             image_url = data.get('image_url')
 
         if not prompt and not image_url:
             return jsonify({'success': False, 'error': '请输入提示词或上传图片'}), 400
 
-        # 使用用户提供的 Key 或默认 Key
-        api_key = user_api_key if user_api_key else API_KEY
-
-        # 检查并使用本地 LLM 优化提示词
+        # ========== 2. 本地 LLM 优化提示词（引擎选择前完成） ==========
         final_prompt = prompt
         llm_used = None
 
@@ -234,6 +261,77 @@ def create_world():
                     final_prompt = enhanced
                     llm_used = llm_type
                     logging.info(f"使用 {llm_type} 优化提示词: {prompt} -> {final_prompt}")
+
+        # ========== 3. 智能引擎选择 ==========
+        has_image = bool(image_file or image_url)
+        try:
+            loop = get_asyncio_loop()
+            selection_result = loop.run_coroutine_threadsafe(
+                smart_selector.select_best_engine(
+                    prompt=final_prompt,
+                    has_image=has_image,
+                    user_preference=engine_preference,
+                    urgency_level=2
+                ), loop
+            ).result(timeout=5.0)
+
+            selected_engine = selection_result.selected_engine
+            logging.info(f"智能引擎选择: {selected_engine.value} - {selection_result.reasoning}")
+
+        except Exception as e:
+            logging.warning(f"智能选择失败，使用默认引擎: {e}")
+            selected_engine = GenerationEngine.WORLD_LABS
+
+        # ========== 4. Stable Zero123 引擎处理 ==========
+        if selected_engine == GenerationEngine.STABLE_3D and has_image:
+            try:
+                image_to_process = None
+                if image_file:
+                    # 从已保存的文件路径读取（避免stream已消费的问题）
+                    saved_filepath = os.path.join(UPLOAD_DIR, filename)
+                    if os.path.exists(saved_filepath):
+                        image_to_process = Image.open(saved_filepath)
+                    else:
+                        image_to_process = Image.open(image_file.stream)
+                elif image_url:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Stable Zero123暂时不支持URL输入，请上传图片文件'
+                    }), 400
+
+                if image_to_process:
+                    loop = get_asyncio_loop()
+                    stable_result = loop.run_coroutine_threadsafe(
+                        stable_3d_generator.generate_3d_from_image(
+                            image_to_process,
+                            final_prompt or "a 3D model"
+                        ), loop
+                    ).result(timeout=120.0)
+
+                    if stable_result.get('success'):
+                        return jsonify({
+                            'success': True,
+                            'engine_used': 'stable-zero123',
+                            'generation_type': 'multi_view_3d',
+                            'result': stable_result,
+                            'task_id': f"stable3d_{uuid.uuid4().hex[:8]}",
+                            'status': 'completed',
+                            'original_prompt': prompt,
+                            'enhanced_prompt': final_prompt if final_prompt != prompt else None,
+                            'llm_used': llm_used,
+                            'image_url': image_url,
+                            'message': '使用Stable Zero123生成了多视角3D视图'
+                        })
+                    else:
+                        logging.warning(f"Stable Zero123失败，降级到World Labs: {stable_result.get('error')}")
+                        selected_engine = GenerationEngine.WORLD_LABS
+
+            except Exception as e:
+                logging.error(f"Stable Zero123处理失败: {e}")
+                selected_engine = GenerationEngine.WORLD_LABS
+
+        # ========== 5. World Labs 引擎处理（默认/降级） ==========
+        api_key = user_api_key if user_api_key else API_KEY
 
         headers = {
             'WLT-Api-Key': api_key,
@@ -259,7 +357,7 @@ def create_world():
             "world_prompt": world_prompt
         }
 
-        logging.info(f"创建 3D 世界: prompt={final_prompt[:100]}...")
+        logging.info(f"创建 3D 世界 (World Labs): prompt={final_prompt[:100]}...")
         response = requests.post(
             f'{API_URL}/worlds:generate',
             headers=headers,
@@ -272,6 +370,7 @@ def create_world():
             logging.info(f"任务创建成功: task_id={result.get('operation_id')}")
             return jsonify({
                 'success': True,
+                'engine_used': 'world-labs',
                 'task_id': result.get('operation_id'),
                 'status': 'processing',
                 'original_prompt': prompt,
@@ -290,6 +389,68 @@ def create_world():
     except Exception as e:
         logging.error(f"创建世界失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@world_bp.route('/engine-status')
+def engine_status():
+    """获取3D生成引擎状态"""
+    try:
+        # 获取智能选择器的状态报告
+        status_report = smart_selector.get_engine_status_report()
+        statistics = smart_selector.get_selection_statistics()
+
+        # 获取Stable Zero123模型信息
+        stable_3d_info = stable_3d_generator.get_model_info()
+
+        return jsonify({
+            'success': True,
+            'report_generated_at': datetime.now().isoformat(),
+            'engines': status_report,
+            'selection_statistics': statistics,
+            'stable_zero123_info': stable_3d_info,
+            'message': '返回所有3D生成引擎的状态信息'
+        })
+
+    except Exception as e:
+        logging.error(f"获取引擎状态失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'获取引擎状态失败: {e}'
+        }), 500
+
+
+@world_bp.route('/test-stable-3d', methods=['POST'])
+def test_stable_3d():
+    """测试Stable Zero123功能（开发用）"""
+    try:
+        if 'image' not in request.files:
+            return jsonify({'success': False, 'error': '需要上传图片进行测试'}), 400
+
+        image_file = request.files['image']
+        prompt = request.form.get('prompt', 'a 3D model')
+
+        # 打开图片
+        image = Image.open(image_file.stream).convert('RGB')
+
+        # 启动异步任务
+        loop = get_asyncio_loop()
+        result = loop.run_coroutine_threadsafe(
+            stable_3d_generator.generate_3d_from_image(image, prompt, num_views=2),  # 快速测试用2个视图
+            loop
+        ).result(timeout=60.0)
+
+        return jsonify({
+            'success': True,
+            'test_result': result,
+            'message': 'Stable Zero123测试完成'
+        })
+
+    except Exception as e:
+        logging.error(f"Stable Zero123测试失败: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @world_bp.route('/task/<task_id>', methods=['GET'])

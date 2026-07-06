@@ -3,8 +3,8 @@
 **用中文提示词生成 3D 世界** - 基于 World Labs API 的智能 3D 场景生成服务
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-green.svg)]()
-[![Flask](https://img.shields.io/badge/Flask-3.0-red.svg)]()
+![Python 3.11+](https://img.shields.io/badge/Python-3.11+-green.svg)
+![Flask](https://img.shields.io/badge/Flask-3.0-red.svg)
 
 ---
 
@@ -12,9 +12,11 @@
 
 - 📝 **中文输入** - 直接用中文描述你的想象
 - 🖼️ **图片转 3D** - 支持上传图片生成 3D 世界
+- 🌐 **混合生成模式** - 智能选择World Labs和开源Stable Zero123引擎
 - 🎮 **交互式预览** - 生成后可交互查看 3D 世界
 - 💡 **示例画廊** - 快速参考示例
 - 🤖 **本地 LLM 支持** - 可选使用 LM Studio 或 Ollama 优化提示词
+- 🔓 **完全开源选项** - 本地运行，保护数据隐私
 - 🐳 **Docker 支持** - 一键部署
 - 🔒 **安全优化** - 环境变量管理 API Key，防止泄露
 
@@ -24,7 +26,7 @@
 
 ### 文字模式
 
-```
+```text
 ┌─────────────────────────────────────┐
 │  🎲 Marble 3D 世界生成器          │
 │  用中文描述你的想象，或上传图片，  │
@@ -54,7 +56,7 @@
 
 ### 图片模式
 
-```
+```text
 ┌─────────────────────────────────────┐
 │  图片上传区域                      │
 │  ┌─────────────────────────────┐  │
@@ -72,7 +74,7 @@
 
 ### 生成结果
 
-```
+```text
 ┌─────────────────────────────────────┐
 │  🎮 3D 世界预览                  │
 │  ┌─────────────────────────────┐  │
@@ -98,6 +100,7 @@
 **提示词**：`一个温馨的咖啡馆，柔和的灯光，窗外下雨`
 
 **生成的 3D 世界**：
+
 - 🌐 [点击查看 3D 世界](https://marble.worldlabs.ai/world/example-1)
 - 🖼️ [全景图](https://example.com/pano-1.jpg)
 
@@ -108,6 +111,7 @@
 **提示词**：`未来科幻城市，霓虹灯闪烁`
 
 **生成的 3D 世界**：
+
 - 🌐 [点击查看 3D 世界](https://marble.worldlabs.ai/world/example-2)
 - 🖼️ [全景图](https://example.com/pano-2.jpg)
 
@@ -118,6 +122,7 @@
 **提示词**：`宁静的日本庭院，樱花盛开`
 
 **生成的 3D 世界**：
+
 - 🌐 [点击查看 3D 世界](https://marble.worldlabs.ai/world/example-3)
 - 🖼️ [全景图](https://example.com/pano-3.jpg)
 
@@ -125,14 +130,17 @@
 
 ## 🏗️ 架构
 
-```
-用户(中文)
+```text
+用户(中文描述/图片)
    ↓
 后端 Flask API
    ↓
-[可选] 本地 LLM 优化提示词 → World Labs API
+智能引擎选择器
+   ├──→ 本地 LLM 优化提示词
+   ├──→ 🌍 World Labs API (高质量云端服务)
+   └──→ 🔓 Stable Zero123 (开源本地模型)
    ↓
-返回 3D 世界 URL
+返回 3D 世界 URL + 多视角图像
 ```
 
 ---
@@ -236,16 +244,17 @@ docker run -p 5000:5000 --env-file .env marble-3d-service
 
 ### POST `/api/create`
 
-创建 3D 世界
+创建 3D 世界（支持智能引擎选择）
 
 **参数：**
 
 | 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
+| -------- | ------ | ------ | ------ |
 | `prompt` | string | 否* | 提示词（中文或英文） |
 | `image` | file | 否* | 图片文件（JPG/PNG/WEBP） |
 | `api_key` | string | 否 | 自定义 World Labs API Key |
 | `use_local_llm` | boolean | 否 | 是否使用本地 LLM 优化提示词（默认 `true`） |
+| `engine` | string | 否 | 指定生成引擎: `world_labs`, `stable_3d`, `auto`（默认） |
 
 *注：`prompt` 和 `image` 至少提供一个
 
@@ -272,7 +281,7 @@ docker run -p 5000:5000 --env-file .env marble-3d-service
 **参数：**
 
 | 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
+| -------- | ------ | ------ | ------ |
 | `api_key` | query | 否 | 自定义 API Key |
 
 **响应（处理中）：**
@@ -308,6 +317,38 @@ docker run -p 5000:5000 --env-file .env marble-3d-service
 
 ---
 
+### GET `/api/engine-status`
+
+获取3D生成引擎状态
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "engines": {
+    "world_labs": {"available": true, "last_check": "2024-01-01 12:00:00"},
+    "stable_3d": {"available": true, "last_check": "2024-01-01 12:00:00"}
+  },
+  "selection_statistics": {"total_selections": 42}
+}
+```
+
+---
+
+### POST `/api/test-stable-3d`
+
+测试Stable Zero123功能（开发用）
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+| -------- | ------ | ------ | ------ |
+| `image` | file | 是 | 测试图片 |
+| `prompt` | string | 否 | 测试提示词 |
+
+---
+
 ### GET `/api/llm-status`
 
 获取本地 LLM 状态
@@ -329,7 +370,7 @@ docker run -p 5000:5000 --env-file .env marble-3d-service
 
 ### 项目结构
 
-```
+```text
 marble-3d-service/
 ├── backend/                # Flask 后端
 │   ├── app.py            # 主应用
@@ -415,9 +456,11 @@ flake8 backend/
 ## 🙏 致谢
 
 - [World Labs AI](https://worldlabs.ai) - 3D 世界生成 API
+- [Stability AI](https://stability.ai/) - Stable Zero123 开源3D模型
 - [Flask](https://flask.palletsprojects.com/) - Web 框架
 - [LM Studio](https://lmstudio.ai/) - 本地 LLM 运行环境
 - [Ollama](https://ollama.com/) - 本地 LLM 运行环境
+- [Hugging Face](https://huggingface.co/) - Diffusers 框架和模型仓库
 
 ---
 

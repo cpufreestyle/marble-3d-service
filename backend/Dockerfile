@@ -2,9 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安装系统依赖
+# 安装系统依赖（包括Pillow所需的图像处理库）
 RUN apt-get update && apt-get install -y \
     gcc \
+    libjpeg-dev \
+    zlib1g-dev \
+    libpng-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
@@ -12,6 +15,9 @@ COPY requirements.txt .
 
 # 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
+
+# 创建生成文件目录
+RUN mkdir -p /app/generated_3d_views /app/uploads
 
 # 复制应用代码
 COPY . .

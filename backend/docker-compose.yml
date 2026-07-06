@@ -15,6 +15,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./uploads:/app/uploads
+      - ./generated_3d_views:/app/generated_3d_views
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:

@@ -9,8 +9,26 @@ python-dotenv>=1.0.0
 # HTTP requests
 requests>=2.31.0
 
-# Production server (optional, for production deployment)
-# gunicorn>=21.0.0
+# Image processing (for Stable Zero123 and image upload)
+Pillow>=10.0.0
+
+# System monitoring (for smart engine selector)
+psutil>=5.9.0
+
+# Production server
+gunicorn>=21.0.0
 
 # Utilities
 python-dateutil>=2.8.2
+
+# ===== 开源3D模型依赖（可选，用于Stable Zero123） =====
+# 安装方式: pip install -r requirements-open-source.txt
+# 或者取消下面注释直接安装
+
+# diffusers>=0.24.0
+# accelerate>=0.25.0
+# safetensors>=0.4.0
+# torch>=2.1.0
+# torchvision>=0.16.0
+# einops>=0.7.0
+# tqdm>=4.66.0

@@ -1,0 +1,19 @@
+# 开源3D生成模型依赖
+# 用于Stable Zero123、PyTorch3D等开源模型的集成
+
+diffusers>=0.24.0
+accelerate>=0.25.0
+safetensors>=0.4.0
+open3d>=0.17.0
+trimesh>=4.0.0
+omegaconf>=2.3.0
+einops>=0.7.0
+
+# GPU优化（如果使用NVIDIA GPU）
+# xformers>=0.0.22  # 取消注释如果使用支持xformers的GPU
+
+# 3D处理和渲染
+pyvista>=0.43.0
+vedo>=2023.5.0
+
+tqdm>=4.66.0
