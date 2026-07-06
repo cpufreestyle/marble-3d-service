@@ -14,9 +14,11 @@ from dotenv import load_dotenv
 # 加载环境变量（从 .env 文件）— 必须在 routes.world 导入前执行
 load_dotenv()
 
+from extensions import limiter  # noqa: E402
 from routes.world import world_bp  # noqa: E402
 
-FRONTEND_DIR = os.path.join(os.path.dirname(__file__), 'static')
+# 前端目录：统一指向项目根目录下的 frontend/，不再维护 backend/static 副本
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend')
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', 'uploads')
 GENERATED_3D_DIR = os.path.join(os.path.dirname(__file__), 'generated_3d_views')
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
@@ -24,6 +26,7 @@ Path(GENERATED_3D_DIR).mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 CORS(app)
+limiter.init_app(app)
 
 app.config['SECRET_KEY'] = os.environ.get(
     'SECRET_KEY', 'dev-secret-key-change-in-production'

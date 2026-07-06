@@ -390,6 +390,19 @@
             background: rgba(255, 255, 255, 0.2);
         }
 
+        .btn-cancel {
+            background: rgba(255, 107, 107, 0.2);
+            border: 1px solid rgba(255, 107, 107, 0.5);
+            color: #ff6b6b;
+            margin-top: 8px;
+            padding: 10px 20px;
+            font-size: 0.85rem;
+        }
+
+        .btn-cancel:hover:not(:disabled) {
+            background: rgba(255, 107, 107, 0.35);
+        }
+
         /* 结果区域 */
         .result-area {
             min-height: 320px;
@@ -742,23 +755,37 @@
         </div>
 
         <footer>
-            <p>Marble 3D v1.1 | 支持文字 + 图片生成 | Powered by World Labs API & Local LLM</p>
+            <p>Marble 3D v1.2 | 支持文字 + 图片生成 | Powered by World Labs API & Local LLM</p>
         </footer>
     </div>
 
     <div class="toast" id="toast" role="alert" aria-live="assertive"></div>
 
     <script>
+        'use strict';
+
         const API_BASE = window.location.origin + '/api';
         let currentTaskId = null;
         let currentWorldUrl = null;
-        let pollInterval = null;
-        let checkCount = 0;
+        let pollTimeout = null;
+        let pollCount = 0;
         let userApiKey = '';
         let llmAvailable = false;
         let currentMode = 'text';
         let uploadedImageFile = null;
         let abortController = null;
+
+        // ===== XSS 防护：HTML 转义 =====
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
+        }
+
+        function escapeAttr(text) {
+            return escapeHtml(text).replace(/'/g, '&#39;');
+        }
 
         // ===== 模式切换 =====
         function switchMode(mode) {
@@ -767,15 +794,15 @@
             document.getElementById('tabImage').classList.toggle('active', mode === 'image');
             document.getElementById('modeText').classList.toggle('active', mode === 'text');
             document.getElementById('modeImage').classList.toggle('active', mode === 'image');
-            
-            // 更新 ARIA 属性
+
             document.getElementById('tabText').setAttribute('aria-selected', mode === 'text');
             document.getElementById('tabImage').setAttribute('aria-selected', mode === 'image');
         }
 
         // ===== 页面加载时初始化 =====
         document.addEventListener('DOMContentLoaded', async function () {
-            const savedKey = localStorage.getItem('worldlabs_api_key');
+            // 使用 sessionStorage 而非 localStorage（关闭标签页后自动清除）
+            const savedKey = sessionStorage.getItem('worldlabs_api_key');
             if (savedKey) {
                 document.getElementById('apiKeyInput').value = savedKey;
                 userApiKey = savedKey;
@@ -788,14 +815,14 @@
         async function checkLlmStatus() {
             const statusEl = document.getElementById('llmStatus');
             try {
-                const response = await fetch(`${API_BASE}/llm-status`);
+                const response = await fetch(API_BASE + '/llm-status');
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    throw new Error('HTTP error! status: ' + response.status);
                 }
                 const data = await response.json();
                 if (data.available) {
                     llmAvailable = true;
-                    statusEl.textContent = `✓ ${data.type.toUpperCase()}`;
+                    statusEl.textContent = '\u2713 ' + data.type.toUpperCase();
                     statusEl.className = 'api-status ok';
                 } else {
                     llmAvailable = false;
@@ -818,14 +845,23 @@
         function saveApiKey() {
             const key = document.getElementById('apiKeyInput').value.trim();
             if (key) {
-                localStorage.setItem('worldlabs_api_key', key);
+                sessionStorage.setItem('worldlabs_api_key', key);
                 userApiKey = key;
-                showToast('✅ API Key 已保存');
+                showToast('\u2705 API Key 已保存');
             } else {
-                localStorage.removeItem('worldlabs_api_key');
+                sessionStorage.removeItem('worldlabs_api_key');
                 userApiKey = '';
-                showToast('⚠️ 已清除 API Key');
+                showToast('\u26a0\ufe0f 已清除 API Key');
             }
+        }
+
+        // ===== 构建 API Key 请求头 =====
+        function getAuthHeaders() {
+            const headers = {};
+            if (userApiKey) {
+                headers['X-API-Key'] = userApiKey;
+            }
+            return headers;
         }
 
         // ===== 图片上传 =====
@@ -833,14 +869,12 @@
             const uploadArea = document.getElementById('uploadArea');
             const fileInput = document.getElementById('imageInput');
 
-            // 点击上传
             fileInput.addEventListener('change', function (e) {
                 if (e.target.files && e.target.files[0]) {
                     handleImageFile(e.target.files[0]);
                 }
             });
 
-            // 拖拽上传
             uploadArea.addEventListener('dragover', function (e) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -857,34 +891,34 @@
                 e.preventDefault();
                 e.stopPropagation();
                 uploadArea.classList.remove('drag-over');
-                const file = e.dataTransfer.files[0];
+                var file = e.dataTransfer.files[0];
                 if (file && file.type.startsWith('image/')) {
                     handleImageFile(file);
                 } else {
-                    showToast('⚠️ 请上传图片文件', true);
+                    showToast('\u26a0\ufe0f 请上传图片文件', true);
                 }
             });
         }
 
         function handleImageFile(file) {
             if (file.size > 10 * 1024 * 1024) {
-                showToast('⚠️ 图片不能超过 10MB', true);
+                showToast('\u26a0\ufe0f 图片不能超过 10MB', true);
                 return;
             }
-            const ext = file.name.split('.').pop().toLowerCase();
+            var ext = file.name.split('.').pop().toLowerCase();
             if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
-                showToast('⚠️ 只支持 JPG / PNG / WEBP 格式', true);
+                showToast('\u26a0\ufe0f 只支持 JPG / PNG / WEBP 格式', true);
                 return;
             }
             uploadedImageFile = file;
-            const reader = new FileReader();
+            var reader = new FileReader();
             reader.onload = function (e) {
                 document.getElementById('previewImg').src = e.target.result;
                 document.getElementById('imagePreviewBox').style.display = 'block';
                 document.getElementById('uploadArea').style.display = 'none';
             };
             reader.onerror = function () {
-                showToast('⚠️ 图片读取失败', true);
+                showToast('\u26a0\ufe0f 图片读取失败', true);
             };
             reader.readAsDataURL(file);
         }
@@ -901,7 +935,7 @@
             switchMode('text');
             document.getElementById('prompt').value = text;
             window.scrollTo({ top: 0, behavior: 'smooth' });
-            showToast('📝 已加载示例提示词');
+            showToast('\ud83d\udcdd 已加载示例提示词');
         }
 
         function clearForm() {
@@ -914,41 +948,58 @@
                     document.getElementById('imagePrompt').value = '';
                 }
                 showPlaceholder();
-                showToast('🗑️ 已清空表单');
+                showToast('\ud83d\uddd1\ufe0f 已清空表单');
             }
         }
 
         function showPlaceholder() {
-            document.getElementById('resultArea').innerHTML = `
-                <div class="result-placeholder">
-                    <div class="icon">🌍</div>
-                    <p>在左侧输入描述或上传图片</p>
-                    <p style="margin-top: 8px;">点击生成按钮，你的 3D 世界将在这里展示</p>
-                </div>
-            `;
+            document.getElementById('resultArea').innerHTML =
+                '<div class="result-placeholder">' +
+                '<div class="icon">\ud83c\udf0d</div>' +
+                '<p>在左侧输入描述或上传图片</p>' +
+                '<p style="margin-top: 8px;">点击生成按钮，你的 3D 世界将在这里展示</p>' +
+                '</div>';
         }
 
         // ===== Toast =====
-        function showToast(message, isError = false) {
-            const toast = document.getElementById('toast');
+        function showToast(message, isError) {
+            var toast = document.getElementById('toast');
             toast.textContent = message;
             toast.className = 'toast' + (isError ? ' error' : '');
             toast.classList.add('show');
-            setTimeout(() => toast.classList.remove('show'), 3000);
+            setTimeout(function () { toast.classList.remove('show'); }, 3000);
         }
 
         function showLoading() {
-            document.getElementById('resultArea').innerHTML = `
-                <div class="loading-container">
-                    <div class="spinner"></div>
-                    <div class="loading-text">正在生成你的 3D 世界...</div>
-                    <div class="loading-subtext">预计需要 30 秒 ~ 5 分钟</div>
-                </div>
-            `;
+            document.getElementById('resultArea').innerHTML =
+                '<div class="loading-container">' +
+                '<div class="spinner"></div>' +
+                '<div class="loading-text">正在生成你的 3D 世界...</div>' +
+                '<div class="loading-subtext">预计需要 30 秒 ~ 5 分钟</div>' +
+                '<button class="btn btn-cancel" style="max-width:200px;margin-top:15px;" onclick="cancelGeneration()">\u274c 取消生成</button>' +
+                '</div>';
+        }
+
+        // ===== 取消生成 =====
+        function cancelGeneration() {
+            if (abortController) {
+                abortController.abort();
+                abortController = null;
+            }
+            if (pollTimeout) {
+                clearTimeout(pollTimeout);
+                pollTimeout = null;
+            }
+            currentTaskId = null;
+            var btn = document.getElementById('generateBtn');
+            btn.disabled = false;
+            btn.textContent = '\ud83d\ude80 开始生成';
+            showPlaceholder();
+            showToast('\u274c 已取消生成');
         }
 
         function showResult(data) {
-            const area = document.getElementById('resultArea');
+            var area = document.getElementById('resultArea');
 
             // ===== 检测结果类型：Stable Zero123 多视角 vs World Labs =====
             if (data.view_urls && Array.isArray(data.view_urls) && data.view_urls.length > 0) {
@@ -958,140 +1009,175 @@
 
             // ===== World Labs 结果处理 =====
             currentWorldUrl = data.world_url || data.pano_url;
-            const previewUrl = data.preview_url || data.thumbnail_url || data.pano_url;
+            var previewUrl = data.preview_url || data.thumbnail_url || data.pano_url;
 
-            let thumbnailHtml = '';
+            var thumbnailHtml = '';
             if (previewUrl) {
-                thumbnailHtml = `<img src="${previewUrl}" alt="Preview" style="width:100%;height:100%;object-fit:cover;" onerror="this.parentElement.innerHTML='<div style=\"color:#666;display:flex;align-items:center;justify-content:center;height:100%;\">预览加载失败</div>'">`;
+                var safeUrl = escapeAttr(previewUrl);
+                thumbnailHtml =
+                    '<img src="' + safeUrl + '" alt="Preview" style="width:100%;height:100%;object-fit:cover;" ' +
+                    'onerror="this.parentElement.innerHTML=' +
+                    '\'&lt;div style=&quot;color:#666;display:flex;align-items:center;justify-content:center;height:100%;&quot;&gt;预览加载失败&lt;/div&gt;\'">';
             }
 
-            let actionButtons = '';
+            var actionButtons = '';
             if (data.world_url) {
-                actionButtons += `<button class="btn btn-primary" onclick="window.open('${data.world_url}', '_blank')">🌐 打开 3D 世界</button>`;
+                actionButtons += '<button class="btn btn-primary" onclick="window.open(\'' + escapeAttr(data.world_url) + '\', \'_blank\')">\ud83c\udf10 打开 3D 世界</button>';
             }
             if (data.pano_url) {
-                actionButtons += `<button class="btn btn-secondary" onclick="window.open('${data.pano_url}', '_blank')">🖼️ 全景图</button>`;
+                actionButtons += '<button class="btn btn-secondary" onclick="window.open(\'' + escapeAttr(data.pano_url) + '\', \'_blank\')">\ud83d\uddbc\ufe0f 全景图</button>';
             }
-            actionButtons += `<button class="btn btn-secondary" onclick="copyLink()">📋 复制链接</button>`;
+            actionButtons += '<button class="btn btn-secondary" onclick="copyLink()">\ud83d\udccb 复制链接</button>';
 
-            const engineBadge = data.engine_used ? `<span style="color:#00d2ff;font-size:0.75rem;">🔧 ${data.engine_used}</span>` : '';
+            var engineBadge = data.engine_used
+                ? '<span style="color:#00d2ff;font-size:0.75rem;">\ud83d\udd27 ' + escapeHtml(data.engine_used) + '</span>'
+                : '';
+            var captionText = escapeHtml(data.caption || '3D 世界已生成');
 
-            area.innerHTML = `
-                <div class="pano-container" style="background:#000;">
-                    ${thumbnailHtml || '<div style="color:#666;display:flex;align-items:center;justify-content:center;height:100%;">生成中...</div>'}
-                </div>
-                <div style="margin-top:10px;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;">
-                    <p style="color:#aaa;font-size:0.8rem;">${data.caption || '3D 世界已生成'}</p>
-                    ${engineBadge}
-                </div>
-                <div class="result-actions" style="margin-top:12px;">
-                    ${actionButtons}
-                </div>
-            `;
+            area.innerHTML =
+                '<div class="pano-container" style="background:#000;">' +
+                thumbnailHtml +
+                '<div style="color:#666;display:flex;align-items:center;justify-content:center;height:100%;">生成中...</div>' +
+                '</div>' +
+                '<div style="margin-top:10px;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;">' +
+                '<p style="color:#aaa;font-size:0.8rem;">' + captionText + '</p>' +
+                engineBadge +
+                '</div>' +
+                '<div class="result-actions" style="margin-top:12px;">' +
+                actionButtons +
+                '</div>';
+
+            // 如果有 thumbnailHtml，移除 "生成中..." 占位
+            if (thumbnailHtml) {
+                var placeholderDiv = area.querySelector('.pano-container > div');
+                if (placeholderDiv) placeholderDiv.remove();
+            }
         }
 
         // ===== Stable Zero123 多视角结果展示 =====
         function showStable3DResult(data) {
-            const area = document.getElementById('resultArea');
-            const viewUrls = data.view_urls || [];
+            var area = document.getElementById('resultArea');
+            var viewUrls = data.view_urls || [];
 
-            // 保存第一个视角URL作为可复制链接
-            currentWorldUrl = viewUrls[0] ? (window.location.origin + '/' + viewUrls[0]) : null;
+            currentWorldUrl = viewUrls[0]
+                ? (window.location.origin + '/' + viewUrls[0])
+                : null;
 
-            // 构建多视角画廊
-            let galleryHtml = '';
-            viewUrls.forEach((url, i) => {
-                const fullUrl = url.startsWith('http') ? url : (window.location.origin + '/' + url);
-                galleryHtml += `
-                    <div style="position:relative;border-radius:8px;overflow:hidden;cursor:pointer;transition:transform 0.2s;" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'" onclick="window.open('${fullUrl}', '_blank')">
-                        <img src="${fullUrl}" alt="视角 ${i + 1}" style="width:100%;aspect-ratio:1;object-fit:cover;background:#000;display:block;" onerror="this.parentElement.innerHTML='<div style=\"aspect-ratio:1;display:flex;align-items:center;justify-content:center;color:#666;background:#111;\">加载失败</div>'">
-                        <div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.6);padding:4px 8px;font-size:0.75rem;">视角 ${i + 1}</div>
-                    </div>
-                `;
+            var galleryHtml = '';
+            viewUrls.forEach(function (url, i) {
+                var fullUrl = url.startsWith('http')
+                    ? url
+                    : (window.location.origin + '/' + url);
+                var safeUrl = escapeAttr(fullUrl);
+                galleryHtml +=
+                    '<div style="position:relative;border-radius:8px;overflow:hidden;cursor:pointer;transition:transform 0.2s;" ' +
+                    'onmouseover="this.style.transform=\'scale(1.02)\'" ' +
+                    'onmouseout="this.style.transform=\'scale(1)\'" ' +
+                    'onclick="window.open(\'' + safeUrl + '\', \'_blank\')">' +
+                    '<img src="' + safeUrl + '" alt="视角 ' + (i + 1) + '" ' +
+                    'style="width:100%;aspect-ratio:1;object-fit:cover;background:#000;display:block;" ' +
+                    'onerror="this.parentElement.innerHTML=\'&lt;div style=&quot;aspect-ratio:1;display:flex;align-items:center;justify-content:center;color:#666;background:#111;&quot;&gt;加载失败&lt;/div&gt;\'">' +
+                    '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.6);padding:4px 8px;font-size:0.75rem;">视角 ' + (i + 1) + '</div>' +
+                    '</div>';
             });
 
-            const gridCols = viewUrls.length >= 4 ? 'repeat(4, 1fr)' : `repeat(${viewUrls.length}, 1fr)`;
-            const caption = data.message || `已生成 ${viewUrls.length} 个3D视角`;
-            const genTime = data.generation_time ? `（耗时 ${data.generation_time.toFixed(1)}s）` : '';
+            var gridCols = viewUrls.length >= 4
+                ? 'repeat(4, 1fr)'
+                : 'repeat(' + viewUrls.length + ', 1fr)';
+            var caption = escapeHtml(data.message || '已生成 ' + viewUrls.length + ' 个3D视角');
+            var genTime = data.generation_time
+                ? '（耗时 ' + data.generation_time.toFixed(1) + 's）'
+                : '';
 
-            area.innerHTML = `
-                <div style="margin-bottom:10px;">
-                    <span style="display:inline-block;padding:3px 10px;border-radius:12px;background:rgba(0,255,136,0.15);color:#00ff88;font-size:0.75rem;">🔓 Stable Zero123 开源引擎</span>
-                </div>
-                <div class="pano-container" style="aspect-ratio:auto;min-height:200px;padding:12px;">
-                    <div style="display:grid;grid-template-columns:${gridCols};gap:8px;width:100%;">
-                        ${galleryHtml}
-                    </div>
-                </div>
-                <div style="margin-top:10px;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;">
-                    <p style="color:#aaa;font-size:0.8rem;">${caption}${genTime}</p>
-                </div>
-                <div class="result-actions" style="margin-top:12px;">
-                    <button class="btn btn-primary" onclick="downloadAllViews(${JSON.stringify(viewUrls).replace(/"/g, '&quot;')})">📥 下载所有视角</button>
-                    <button class="btn btn-secondary" onclick="copyLink()">📋 复制链接</button>
-                </div>
-            `;
+            // 将 viewUrls 编码为安全的 JSON 属性
+            var viewUrlsJson = escapeAttr(JSON.stringify(viewUrls));
+
+            area.innerHTML =
+                '<div style="margin-bottom:10px;">' +
+                '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:rgba(0,255,136,0.15);color:#00ff88;font-size:0.75rem;">\ud83d\udd13 Stable Zero123 开源引擎</span>' +
+                '</div>' +
+                '<div class="pano-container" style="aspect-ratio:auto;min-height:200px;padding:12px;">' +
+                '<div style="display:grid;grid-template-columns:' + gridCols + ';gap:8px;width:100%;">' +
+                galleryHtml +
+                '</div>' +
+                '</div>' +
+                '<div style="margin-top:10px;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;">' +
+                '<p style="color:#aaa;font-size:0.8rem;">' + caption + genTime + '</p>' +
+                '</div>' +
+                '<div class="result-actions" style="margin-top:12px;">' +
+                '<button class="btn btn-primary" onclick="downloadAllViews(\'' + viewUrlsJson + '\')">\ud83d\udce5 下载所有视角</button>' +
+                '<button class="btn btn-secondary" onclick="copyLink()">\ud83d\udccb 复制链接</button>' +
+                '</div>';
         }
 
         // ===== 下载所有视角 =====
-        function downloadAllViews(viewUrls) {
+        function downloadAllViews(viewUrlsStr) {
+            var viewUrls;
+            try {
+                viewUrls = JSON.parse(viewUrlsStr);
+            } catch (e) {
+                console.error('Failed to parse view URLs:', e);
+                return;
+            }
             if (!viewUrls || !viewUrls.length) return;
-            viewUrls.forEach((url, i) => {
-                const fullUrl = url.startsWith('http') ? url : (window.location.origin + '/' + url);
-                setTimeout(() => {
-                    const a = document.createElement('a');
+            viewUrls.forEach(function (url, i) {
+                var fullUrl = url.startsWith('http')
+                    ? url
+                    : (window.location.origin + '/' + url);
+                setTimeout(function () {
+                    var a = document.createElement('a');
                     a.href = fullUrl;
-                    a.download = `3d_view_${i + 1}.png`;
+                    a.download = '3d_view_' + (i + 1) + '.png';
                     a.click();
                 }, i * 300);
             });
-            showToast('📥 开始下载所有视角...');
+            showToast('\ud83d\udce5 开始下载所有视角...');
         }
 
         function showError(message) {
-            document.getElementById('resultArea').innerHTML = `
-                <div class="result-placeholder" style="color: #ff6b6b;">
-                    <div class="icon">❌</div>
-                    <p>生成失败</p>
-                    <p style="margin-top: 8px; font-size: 0.85rem;">${message}</p>
-                    <button class="btn btn-secondary" style="margin-top: 15px;" onclick="showPlaceholder()">返回</button>
-                </div>
-            `;
+            var safeMsg = escapeHtml(message);
+            document.getElementById('resultArea').innerHTML =
+                '<div class="result-placeholder" style="color: #ff6b6b;">' +
+                '<div class="icon">\u274c</div>' +
+                '<p>生成失败</p>' +
+                '<p style="margin-top: 8px; font-size: 0.85rem;">' + safeMsg + '</p>' +
+                '<button class="btn btn-secondary" style="margin-top: 15px;" onclick="showPlaceholder()">返回</button>' +
+                '</div>';
         }
 
         function copyLink() {
             if (currentWorldUrl) {
-                navigator.clipboard.writeText(currentWorldUrl).then(() => {
-                    showToast('✅ 链接已复制');
-                }).catch(err => {
+                navigator.clipboard.writeText(currentWorldUrl).then(function () {
+                    showToast('\u2705 链接已复制');
+                }).catch(function (err) {
                     console.error('Copy failed:', err);
-                    showToast('⚠️ 复制失败，请手动复制', true);
+                    showToast('\u26a0\ufe0f 复制失败，请手动复制', true);
                 });
             }
         }
 
         // ===== 核心：生成 3D 世界 =====
         async function generateWorld() {
-            const mode = currentMode;
-            const prompt = (mode === 'text') ?
-                document.getElementById('prompt').value.trim() :
-                document.getElementById('imagePrompt').value.trim();
+            var mode = currentMode;
+            var prompt = (mode === 'text')
+                ? document.getElementById('prompt').value.trim()
+                : document.getElementById('imagePrompt').value.trim();
 
             if (mode === 'text' && !prompt) {
-                showToast('⚠️ 请输入提示词', true);
+                showToast('\u26a0\ufe0f 请输入提示词', true);
                 return;
             }
             if (mode === 'image' && !uploadedImageFile) {
-                showToast('⚠️ 请上传图片', true);
+                showToast('\u26a0\ufe0f 请上传图片', true);
                 return;
             }
 
-            const btn = document.getElementById('generateBtn');
+            var btn = document.getElementById('generateBtn');
             btn.disabled = true;
-            btn.textContent = '⏳ 生成中...';
+            btn.textContent = '\u23f3 生成中...';
 
             showLoading();
-            checkCount = 0;
+            pollCount = 0;
 
             // 取消之前的请求
             if (abortController) {
@@ -1100,31 +1186,36 @@
             abortController = new AbortController();
 
             try {
-                const useLlm = document.getElementById('useLlmToggle').checked;
-                const engineChoice = document.getElementById('engineSelect') ? document.getElementById('engineSelect').value : 'auto';
-                const formData = new FormData();
+                var useLlm = document.getElementById('useLlmToggle').checked;
+                var engineChoice = document.getElementById('engineSelect')
+                    ? document.getElementById('engineSelect').value
+                    : 'auto';
+                var formData = new FormData();
                 formData.append('prompt', prompt || '');
                 formData.append('use_local_llm', useLlm && llmAvailable ? 'true' : 'false');
                 formData.append('engine', engineChoice);
-                if (userApiKey) {
-                    formData.append('api_key', userApiKey);
-                }
 
                 if (mode === 'image' && uploadedImageFile) {
                     formData.append('image', uploadedImageFile);
                 }
 
-                const response = await fetch(`${API_BASE}/create`, {
+                var response = await fetch(API_BASE + '/create', {
                     method: 'POST',
                     body: formData,
+                    headers: getAuthHeaders(),
                     signal: abortController.signal
                 });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    var errData = null;
+                    try { errData = await response.json(); } catch (e) { /* ignore */ }
+                    var errMsg = errData && errData.error
+                        ? errData.error
+                        : 'HTTP error! status: ' + response.status;
+                    throw new Error(errMsg);
                 }
 
-                const data = await response.json();
+                var data = await response.json();
 
                 if (data.enhanced_prompt) {
                     document.getElementById('enhancedPromptBox').style.display = 'block';
@@ -1135,17 +1226,12 @@
 
                 if (data.success) {
                     if (data.status === 'completed' && data.result) {
-                        // 合并 engine_used 到 result 中，供 showResult 使用
                         if (data.engine_used) {
                             data.result.engine_used = data.engine_used;
                         }
                         showResult(data.result);
-                        const engineMsg = data.engine_used ? `（${data.engine_used}）` : '';
-                        showToast('🎉 生成完成！' + engineMsg);
-                    } else if (data.engine_used === 'stable-zero123' && data.result && data.result.view_urls) {
-                        // Stable Zero123 直接返回结果（status=completed 但 result 在顶层）
-                        showResult(data.result);
-                        showToast('🎉 Stable Zero123 生成完成！');
+                        var engineMsg = data.engine_used ? '（' + data.engine_used + '）' : '';
+                        showToast('\ud83c\udf89 生成完成！' + engineMsg);
                     } else {
                         currentTaskId = data.task_id;
                         startPolling();
@@ -1159,52 +1245,66 @@
                     return;
                 }
                 showError(error.message);
-                showToast('⚠️ 生成失败: ' + error.message, true);
+                showToast('\u26a0\ufe0f 生成失败: ' + error.message, true);
             } finally {
                 btn.disabled = false;
-                btn.textContent = '🚀 开始生成';
+                btn.textContent = '\ud83d\ude80 开始生成';
             }
         }
 
+        // ===== 指数退避轮询 =====
         function startPolling() {
-            if (pollInterval) clearInterval(pollInterval);
+            if (pollTimeout) clearTimeout(pollTimeout);
+            pollCount = 0;
+            pollOnce();
+        }
 
-            pollInterval = setInterval(async () => {
-                checkCount++;
+        function pollOnce() {
+            // 指数退避：3s, 3s, 4.5s, 6.75s, ... 最大 15s
+            var delay = Math.min(3000 * Math.pow(1.5, pollCount), 15000);
+            pollCount++;
 
+            pollTimeout = setTimeout(async function () {
                 try {
-                    let url = `${API_BASE}/task/${currentTaskId}`;
-                    if (userApiKey) {
-                        url += `?api_key=${encodeURIComponent(userApiKey)}`;
-                    }
-
-                    const response = await fetch(url);
+                    var url = API_BASE + '/task/' + currentTaskId;
+                    var response = await fetch(url, {
+                        headers: getAuthHeaders()
+                    });
                     if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
+                        throw new Error('HTTP error! status: ' + response.status);
                     }
 
-                    const data = await response.json();
+                    var data = await response.json();
 
                     if (data.success) {
                         if (data.status === 'completed') {
-                            clearInterval(pollInterval);
+                            pollTimeout = null;
                             showResult(data.result);
-                            showToast('🎉 生成完成！');
-                        } else if (checkCount > 60) {
-                            clearInterval(pollInterval);
+                            showToast('\ud83c\udf89 生成完成！');
+                            return;
+                        } else if (pollCount > 60) {
+                            pollTimeout = null;
                             showError('生成超时，请稍后重试');
+                            return;
                         } else {
-                            const progress = data.progress || '生成中...';
-                            document.getElementById('resultArea').innerHTML = `
-                                <div class="loading-container">
-                                    <div class="spinner"></div>
-                                    <div class="loading-text">${progress}</div>
-                                    <div class="loading-subtext">已等待 ${checkCount * 3} 秒...</div>
-                                </div>
-                            `;
+                            var progress = escapeHtml(data.progress || '生成中...');
+                            var elapsed = 0;
+                            // 计算已等待的总时间（近似）
+                            for (var i = 0; i < pollCount; i++) {
+                                elapsed += Math.min(3000 * Math.pow(1.5, i), 15000) / 1000;
+                            }
+                            document.getElementById('resultArea').innerHTML =
+                                '<div class="loading-container">' +
+                                '<div class="spinner"></div>' +
+                                '<div class="loading-text">' + progress + '</div>' +
+                                '<div class="loading-subtext">已等待约 ' + Math.round(elapsed) + ' 秒...</div>' +
+                                '<button class="btn btn-cancel" style="max-width:200px;margin-top:15px;" onclick="cancelGeneration()">\u274c 取消生成</button>' +
+                                '</div>';
+                            // 继续轮询
+                            pollOnce();
                         }
                     } else {
-                        clearInterval(pollInterval);
+                        pollTimeout = null;
                         showError(data.error || '获取状态失败');
                     }
                 } catch (error) {
@@ -1212,12 +1312,16 @@
                         return;
                     }
                     console.error('Poll error:', error);
+                    // 网络错误时继续重试（指数退避）
+                    if (pollCount <= 60) {
+                        pollOnce();
+                    }
                 }
-            }, 3000);
+            }, delay);
         }
 
-        window.addEventListener('beforeunload', () => {
-            if (pollInterval) clearInterval(pollInterval);
+        window.addEventListener('beforeunload', function () {
+            if (pollTimeout) clearTimeout(pollTimeout);
             if (abortController) abortController.abort();
         });
     </script>
