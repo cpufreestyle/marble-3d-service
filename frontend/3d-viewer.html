@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 多视角预览</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a0a;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: rgba(255,255,255,0.03);
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            flex-shrink: 0;
+        }
+        .toolbar-left { display: flex; align-items: center; gap: 12px; }
+        .toolbar h1 { font-size: 1rem; font-weight: 500; }
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            background: rgba(0,255,136,0.15);
+            color: #00ff88;
+            font-size: 0.7rem;
+        }
+        .toolbar-right { display: flex; gap: 8px; }
+        .btn {
+            padding: 8px 16px;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.05);
+            color: #fff;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.25); }
+        .btn.active { background: rgba(0,255,136,0.15); border-color: #00ff88; color: #00ff88; }
+
+        .main-view {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        #mainImage {
+            max-width: 90%;
+            max-height: 90%;
+            object-fit: contain;
+            border-radius: 8px;
+            transition: opacity 0.3s ease;
+            cursor: grab;
+        }
+        #mainImage:active { cursor: grabbing; }
+        .view-label {
+            position: absolute;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.7);
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: #00ff88;
+            pointer-events: none;
+        }
+        .nav-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: #fff;
+            font-size: 1.5rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .nav-arrow:hover { background: rgba(0,255,136,0.2); border-color: #00ff88; }
+        .nav-arrow.left { left: 20px; }
+        .nav-arrow.right { right: 20px; }
+
+        .thumbnails {
+            display: flex;
+            gap: 8px;
+            padding: 12px 20px;
+            background: rgba(255,255,255,0.02);
+            border-top: 1px solid rgba(255,255,255,0.08);
+            justify-content: center;
+            flex-shrink: 0;
+            overflow-x: auto;
+        }
+        .thumb {
+            position: relative;
+            width: 80px;
+            height: 80px;
+            border-radius: 6px;
+            overflow: hidden;
+            cursor: pointer;
+            border: 2px solid transparent;
+            opacity: 0.5;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .thumb:hover { opacity: 0.8; }
+        .thumb.active { border-color: #00ff88; opacity: 1; }
+        .thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .thumb-label {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.7);
+            font-size: 0.6rem;
+            text-align: center;
+            padding: 2px;
+        }
+        .progress-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 2px;
+            background: #00ff88;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <span class="badge">🔓 Stable Zero123</span>
+            <h1>3D 多视角预览</h1>
+        </div>
+        <div class="toolbar-right">
+            <button class="btn" id="rotateBtn" onclick="toggleAutoRotate()">🔄 自动旋转</button>
+            <button class="btn" onclick="downloadAll()">📥 下载全部</button>
+            <button class="btn" onclick="window.close()">✕ 关闭</button>
+        </div>
+    </div>
+
+    <div class="main-view">
+        <div class="progress-bar" id="progressBar" style="width:0%"></div>
+        <button class="nav-arrow left" onclick="prevView()">‹</button>
+        <img id="mainImage" src="" alt="3D View">
+        <button class="nav-arrow right" onclick="nextView()">›</button>
+        <div class="view-label" id="viewLabel">视角 1</div>
+    </div>
+
+    <div class="thumbnails" id="thumbs"></div>
+
+    <script>
+        var views = [];
+        var currentIndex = 0;
+        var rotateTimer = null;
+        var labels = ['正面视角', '左侧视角', '背面视角', '俯视视角', '右侧视角', '3/4 视角', '特写视角', '广角视角'];
+
+        // 解析 URL 参数
+        var params = new URLSearchParams(window.location.search);
+        var viewsParam = params.get('views');
+        if (viewsParam) {
+            views = viewsParam.split(',').map(decodeURIComponent);
+        }
+
+        function init() {
+            if (!views.length) {
+                document.querySelector('.main-view').innerHTML = '<div style="color:#666;">未找到视角数据</div>';
+                return;
+            }
+
+            // 渲染缩略图
+            var thumbsEl = document.getElementById('thumbs');
+            views.forEach(function(url, i) {
+                var div = document.createElement('div');
+                div.className = 'thumb' + (i === 0 ? ' active' : '');
+                div.onclick = function() { switchView(i); };
+                div.innerHTML =
+                    '<img src="' + url + '" alt="视角 ' + (i + 1) + '">' +
+                    '<div class="thumb-label">' + (labels[i] || ('视角 ' + (i + 1))) + '</div>';
+                thumbsEl.appendChild(div);
+            });
+
+            // 显示第一张
+            showView(0);
+
+            // 键盘导航
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'ArrowLeft') prevView();
+                else if (e.key === 'ArrowRight') nextView();
+                else if (e.key === ' ') { e.preventDefault(); toggleAutoRotate(); }
+            });
+
+            // 滑动导航（拖拽）
+            var img = document.getElementById('mainImage');
+            var startX = 0;
+            var isDragging = false;
+            img.addEventListener('mousedown', function(e) {
+                isDragging = true;
+                startX = e.clientX;
+            });
+            document.addEventListener('mousemove', function(e) {
+                if (!isDragging) return;
+            });
+            document.addEventListener('mouseup', function(e) {
+                if (!isDragging) return;
+                isDragging = false;
+                var diff = e.clientX - startX;
+                if (Math.abs(diff) > 50) {
+                    if (diff > 0) prevView();
+                    else nextView();
+                }
+            });
+
+            // 触摸滑动
+            var touchStartX = 0;
+            img.addEventListener('touchstart', function(e) {
+                touchStartX = e.touches[0].clientX;
+            });
+            img.addEventListener('touchend', function(e) {
+                var diff = e.changedTouches[0].clientX - touchStartX;
+                if (Math.abs(diff) > 50) {
+                    if (diff > 0) prevView();
+                    else nextView();
+                }
+            });
+        }
+
+        function showView(index) {
+            if (index < 0 || index >= views.length) return;
+            currentIndex = index;
+            var img = document.getElementById('mainImage');
+            img.style.opacity = '0.3';
+            setTimeout(function() {
+                img.src = views[index];
+                img.style.opacity = '1';
+            }, 150);
+
+            var label = document.getElementById('viewLabel');
+            label.textContent = labels[index] || ('视角 ' + (index + 1));
+
+            // 更新缩略图
+            var thumbs = document.querySelectorAll('.thumb');
+            thumbs.forEach(function(el, i) {
+                el.classList.toggle('active', i === index);
+            });
+
+            // 更新进度条
+            var bar = document.getElementById('progressBar');
+            bar.style.width = ((index + 1) / views.length * 100) + '%';
+        }
+
+        function switchView(index) {
+            stopAutoRotate();
+            showView(index);
+        }
+
+        function nextView() {
+            showView((currentIndex + 1) % views.length);
+        }
+
+        function prevView() {
+            showView((currentIndex - 1 + views.length) % views.length);
+        }
+
+        function toggleAutoRotate() {
+            var btn = document.getElementById('rotateBtn');
+            if (rotateTimer) {
+                stopAutoRotate();
+            } else {
+                btn.textContent = '⏸ 停止旋转';
+                btn.classList.add('active');
+                rotateTimer = setInterval(nextView, 1500);
+            }
+        }
+
+        function stopAutoRotate() {
+            var btn = document.getElementById('rotateBtn');
+            if (rotateTimer) {
+                clearInterval(rotateTimer);
+                rotateTimer = null;
+                btn.textContent = '🔄 自动旋转';
+                btn.classList.remove('active');
+            }
+        }
+
+        function downloadAll() {
+            views.forEach(function(url, i) {
+                setTimeout(function() {
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = '3d_view_' + (i + 1) + '.png';
+                    a.click();
+                }, i * 300);
+            });
+        }
+
+        init();
+    </script>
+</body>
+</html>

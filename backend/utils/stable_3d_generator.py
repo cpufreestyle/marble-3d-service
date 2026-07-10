@@ -64,7 +64,16 @@ class Stable3DGenerator:
     支持从单张图片生成多视角3D模型
     """
 
-    def __init__(self, model_path: str = "stabilityai/stable-zero123"):
+    def __init__(self, model_path: str = "stable-diffusion-v1-5/stable-diffusion-v1-5"):
+        # 设置 HuggingFace 镜像（解决国内网络问题）
+        if not os.environ.get('HF_ENDPOINT'):
+            os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+        # 设置缓存目录到 D 盘（避免 C 盘空间不足）
+        if not os.environ.get('HF_HOME'):
+            os.environ['HF_HOME'] = 'D:\\hf_cache'
+        # 禁用 xet 传输
+        os.environ['HF_HUB_DISABLE_XET'] = '1'
+
         self.model_path = os.environ.get('STABLE_3D_MODEL_PATH', model_path)
         self.pipe = None
         self.is_loaded = False
@@ -121,7 +130,7 @@ class Stable3DGenerator:
         try:
             torch = _get_torch()
             # 延迟导入 diffusers
-            from diffusers import StableDiffusionPipeline, EulerAncestralDiscreteScheduler
+            from diffusers import StableDiffusionImg2ImgPipeline, EulerAncestralDiscreteScheduler
 
             logger.info(f"开始加载模型: {self.model_path}")
 
@@ -129,11 +138,12 @@ class Stable3DGenerator:
             load_kwargs = {
                 'torch_dtype': torch.float16 if self.device == "cuda" else torch.float32,
                 'use_safetensors': True,
-                'low_cpu_mem_usage': True
+                'low_cpu_mem_usage': True,
+                'safety_checker': None,
             }
 
-            # 加载管道
-            self.pipe = StableDiffusionPipeline.from_pretrained(
+            # 加载图片到图片管道（用于多视角生成）
+            self.pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
                 self.model_path,
                 **load_kwargs
             )
@@ -223,7 +233,7 @@ class Stable3DGenerator:
                 return {
                     "success": False,
                     "error": "模型加载失败",
-                    "model": "stable-zero123"
+                    "model": "stable-diffusion-multiview"
                 }
 
         try:
@@ -244,9 +254,18 @@ class Stable3DGenerator:
             for i in range(num_views):
                 logger.info(f"生成视角 {i+1}/{num_views}")
 
-                # 在实际实现中，这里应该通过调整相机参数来生成不同视角
-                # 由于Stable Zero123的具体实现可能需要额外的相机参数控制
-                # 这里作为简化版本，重复调用相同的生成
+                # 多视角提示词
+                view_prompts = [
+                    f"{prompt}, front view, centered, studio lighting",
+                    f"{prompt}, side view, left angle, studio lighting",
+                    f"{prompt}, back view, studio lighting",
+                    f"{prompt}, top-down view, overhead angle",
+                    f"{prompt}, side view, right angle, studio lighting",
+                    f"{prompt}, three-quarter view, studio lighting",
+                    f"{prompt}, close-up detail view",
+                    f"{prompt}, wide angle perspective view",
+                ]
+                current_prompt = view_prompts[i] if i < len(view_prompts) else f"{prompt}, view {i+1}"
 
                 view_start_time = time.time()
 
@@ -258,11 +277,12 @@ class Stable3DGenerator:
                     loop = asyncio.get_running_loop()
                     result = await loop.run_in_executor(
                         None,
-                        lambda: self.pipe(
-                            prompt=prompt,
+                        lambda p=current_prompt: self.pipe(
+                            prompt=p,
                             image=processed_image,
                             num_inference_steps=num_inference_steps,
                             guidance_scale=guidance_scale,
+                            strength=0.6,
                             output_type="pil",
                             generator=torch.Generator(device=self.device).manual_seed(timestamp + i)
                         )
@@ -299,7 +319,7 @@ class Stable3DGenerator:
                 return {
                     "success": False,
                     "error": "所有视角生成失败",
-                    "model": "stable-zero123"
+                    "model": "stable-diffusion-multiview"
                 }
 
             total_generation_time = time.time() - start_time
@@ -331,7 +351,7 @@ class Stable3DGenerator:
             return {
                 "success": False,
                 "error": error_msg,
-                "model": "stable-zero123",
+                "model": "stable-diffusion-multiview",
                 "error_details": "3D生成过程中发生错误，请检查输入图片格式和大小"
             }
 
@@ -355,7 +375,7 @@ class Stable3DGenerator:
             return {
                 "success": False,
                 "error": f"图片解析失败: {e}",
-                "model": "stable-zero123"
+                "model": "stable-diffusion-multiview"
             }
 
     def get_model_info(self) -> Dict[str, Any]:

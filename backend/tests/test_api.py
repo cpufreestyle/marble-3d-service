@@ -59,16 +59,17 @@ class TestAPI(unittest.TestCase):
         self.assertIn('error', data)
 
     def test_create_world_no_api_key(self):
-        """测试创建世界 - 有提示词但无 API Key（应返回 401）"""
+        """测试创建世界 - 有提示词但无 API Key（默认Stable Zero123需图片，应返回400）"""
         response = self.app.post(
             '/api/create',
             json={'prompt': '一只可爱的橘猫'},
             content_type='application/json'
         )
-        # 没有 API Key 时应返回 401
         data = response.get_json()
         if data and not data.get('success'):
-            self.assertIn(response.status_code, [401, 500])
+            # 默认引擎 stable_3d 无图片时返回 400；
+            # 如果切换到 world_labs 无 key 时返回 401
+            self.assertIn(response.status_code, [400, 401, 500])
 
     def test_create_world_with_header_api_key(self):
         """测试创建世界 - 通过 X-API-Key 请求头传递 API Key"""

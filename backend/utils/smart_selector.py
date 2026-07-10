@@ -171,14 +171,16 @@ class SmartEngineSelector:
                 # Apple Silicon
                 pass  # 假设可用
             else:
-                # CPU模式，检查系统内存（简化检查）
+                # CPU模式 — 放宽内存要求，允许运行（仅记录警告）
                 if psutil:
                     system_memory = psutil.virtual_memory().available / (1024**3)
-                    if system_memory < 8.0:
-                        return False, f"系统内存不足: {system_memory:.1f}GB < 8.0GB"
-                else:
-                    # 如果没有psutil，使用默认假设
-                    pass
+                    if system_memory < 4.0:
+                        logger.warning(
+                            f"系统可用内存较低 ({system_memory:.1f}GB)，"
+                            "Stable Zero123 在 CPU 模式下可能较慢"
+                        )
+                # CPU 模式始终可用，只是速度较慢
+                return True, None
 
             return True, None
 

@@ -657,9 +657,9 @@
                 <div class="engine-settings">
                     <h3>🌐 3D 生成引擎</h3>
                     <select id="engineSelect" class="engine-select" aria-label="选择 3D 生成引擎">
-                        <option value="auto">🧠 自动选择（推荐）</option>
+                        <option value="stable_3d" selected>🔓 Stable Zero123（默认）</option>
+                        <option value="auto">🧠 自动选择</option>
                         <option value="world_labs">🌍 World Labs（高质量）</option>
-                        <option value="stable_3d">🔓 Stable Zero123（开源）</option>
                     </select>
                 </div>
 
@@ -683,6 +683,21 @@
                     <div id="enhancedPromptBox" style="display:none;" aria-live="polite">
                         <div>🤖 AI 优化后的提示词</div>
                         <div id="enhancedPromptText"></div>
+                    </div>
+
+                    <!-- AI 生成图片按钮 -->
+                    <button class="btn btn-secondary" id="aiGenImgBtn" onclick="generateImageFromText()" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);color:#00ff88;" aria-label="用 AI 生成图片">
+                        🎨 AI 生成图片
+                    </button>
+
+                    <!-- AI 生成的图片预览 -->
+                    <div id="aiImageBox" style="display:none;margin-top:12px;">
+                        <div style="font-size:0.8rem;color:#00ff88;margin-bottom:6px;">🎨 AI 生成的图片</div>
+                        <div style="position:relative;">
+                            <img id="aiGenPreviewImg" alt="AI生成图片" style="width:100%;max-height:200px;object-fit:contain;border-radius:8px;background:#000;">
+                            <button class="remove-image-btn" onclick="removeAiImage()" aria-label="移除AI图片">×</button>
+                        </div>
+                        <div id="aiImageInfo" style="font-size:0.75rem;color:#888;margin-top:4px;"></div>
                     </div>
                 </div>
 
@@ -774,6 +789,8 @@
         let currentMode = 'text';
         let uploadedImageFile = null;
         let abortController = null;
+let aiGeneratedImageUrl = null;
+let loadingTimer = null;
 
         // ===== XSS 防护：HTML 转义 =====
         function escapeHtml(text) {
@@ -938,19 +955,20 @@
             showToast('\ud83d\udcdd 已加载示例提示词');
         }
 
-        function clearForm() {
-            if (confirm('确定要清空所有输入吗？')) {
-                if (currentMode === 'text') {
-                    document.getElementById('prompt').value = '';
-                    document.getElementById('enhancedPromptBox').style.display = 'none';
-                } else {
-                    removeImage();
-                    document.getElementById('imagePrompt').value = '';
-                }
-                showPlaceholder();
-                showToast('\ud83d\uddd1\ufe0f 已清空表单');
-            }
-        }
+function clearForm() {
+if (confirm('确定要清空所有输入吗？')) {
+if (currentMode === 'text') {
+document.getElementById('prompt').value = '';
+document.getElementById('enhancedPromptBox').style.display = 'none';
+removeAiImage();
+} else {
+removeImage();
+document.getElementById('imagePrompt').value = '';
+}
+showPlaceholder();
+showToast('\ud83d\uddd1\ufe0f 已清空表单');
+}
+}
 
         function showPlaceholder() {
             document.getElementById('resultArea').innerHTML =
@@ -975,13 +993,40 @@
                 '<div class="loading-container">' +
                 '<div class="spinner"></div>' +
                 '<div class="loading-text">正在生成你的 3D 世界...</div>' +
-                '<div class="loading-subtext">预计需要 30 秒 ~ 5 分钟</div>' +
+                '<div class="loading-subtext" id="loadingSubtext">预计需要 30 秒 ~ 5 分钟</div>' +
+                '<div id="loadingTimer" style="color:#00ff88;font-size:0.9rem;margin-top:8px;font-variant-numeric:tabular-nums;">\u23f1 已用 0 秒</div>' +
                 '<button class="btn btn-cancel" style="max-width:200px;margin-top:15px;" onclick="cancelGeneration()">\u274c 取消生成</button>' +
                 '</div>';
+            // 启动计时器
+            var startTime = Date.now();
+            if (loadingTimer) clearInterval(loadingTimer);
+            loadingTimer = setInterval(function() {
+                var elapsed = Math.floor((Date.now() - startTime) / 1000);
+                var mins = Math.floor(elapsed / 60);
+                var secs = elapsed % 60;
+                var timerEl = document.getElementById('loadingTimer');
+                if (timerEl) {
+                    timerEl.textContent = '\u23f1 已用 ' + mins + ' 分 ' + secs + ' 秒';
+                }
+                // 超过 3 分钟时更新提示
+                var subEl = document.getElementById('loadingSubtext');
+                if (subEl && elapsed > 180) {
+                    subEl.textContent = '生成中，请耐心等待...';
+                    subEl.style.color = '#ffaa00';
+                }
+            }, 1000);
+        }
+
+        function stopLoadingTimer() {
+            if (loadingTimer) {
+                clearInterval(loadingTimer);
+                loadingTimer = null;
+            }
         }
 
         // ===== 取消生成 =====
         function cancelGeneration() {
+            stopLoadingTimer();
             if (abortController) {
                 abortController.abort();
                 abortController = null;
@@ -1055,59 +1100,120 @@
         }
 
         // ===== Stable Zero123 多视角结果展示 =====
+        var current3DViews = [];
+        var current3DIndex = 0;
+
         function showStable3DResult(data) {
             var area = document.getElementById('resultArea');
             var viewUrls = data.view_urls || [];
+            current3DViews = viewUrls.map(function(url) {
+                return url.startsWith('http') ? url : (window.location.origin + '/' + url);
+            });
+            current3DIndex = 0;
 
-            currentWorldUrl = viewUrls[0]
-                ? (window.location.origin + '/' + viewUrls[0])
-                : null;
+            currentWorldUrl = current3DViews[0] || null;
 
-            var galleryHtml = '';
-            viewUrls.forEach(function (url, i) {
-                var fullUrl = url.startsWith('http')
-                    ? url
-                    : (window.location.origin + '/' + url);
-                var safeUrl = escapeAttr(fullUrl);
-                galleryHtml +=
-                    '<div style="position:relative;border-radius:8px;overflow:hidden;cursor:pointer;transition:transform 0.2s;" ' +
-                    'onmouseover="this.style.transform=\'scale(1.02)\'" ' +
-                    'onmouseout="this.style.transform=\'scale(1)\'" ' +
-                    'onclick="window.open(\'' + safeUrl + '\', \'_blank\')">' +
-                    '<img src="' + safeUrl + '" alt="视角 ' + (i + 1) + '" ' +
-                    'style="width:100%;aspect-ratio:1;object-fit:cover;background:#000;display:block;" ' +
-                    'onerror="this.parentElement.innerHTML=\'&lt;div style=&quot;aspect-ratio:1;display:flex;align-items:center;justify-content:center;color:#666;background:#111;&quot;&gt;加载失败&lt;/div&gt;\'">' +
-                    '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.6);padding:4px 8px;font-size:0.75rem;">视角 ' + (i + 1) + '</div>' +
+            var viewLabels = ['正面视角', '左侧视角', '背面视角', '俯视视角', '右侧视角', '3/4 视角', '特写视角', '广角视角'];
+
+            var thumbsHtml = '';
+            current3DViews.forEach(function (url, i) {
+                var safeUrl = escapeAttr(url);
+                var label = viewLabels[i] || ('视角 ' + (i + 1));
+                thumbsHtml +=
+                    '<div class="view-thumb' + (i === 0 ? ' active' : '') + '" ' +
+                    'data-index="' + i + '" ' +
+                    'onclick="switch3DView(' + i + ')" ' +
+                    'style="position:relative;border-radius:6px;overflow:hidden;cursor:pointer;transition:all 0.2s;border:2px solid ' + (i === 0 ? '#00ff88' : 'transparent') + ';opacity:' + (i === 0 ? '1' : '0.5') + ';">' +
+                    '<img src="' + safeUrl + '" alt="' + escapeAttr(label) + '" ' +
+                    'style="width:100%;aspect-ratio:1;object-fit:cover;background:#000;display:block;">' +
+                    '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.7);padding:3px 6px;font-size:0.7rem;text-align:center;">' + escapeHtml(label) + '</div>' +
                     '</div>';
             });
 
-            var gridCols = viewUrls.length >= 4
-                ? 'repeat(4, 1fr)'
-                : 'repeat(' + viewUrls.length + ', 1fr)';
             var caption = escapeHtml(data.message || '已生成 ' + viewUrls.length + ' 个3D视角');
             var genTime = data.generation_time
                 ? '（耗时 ' + data.generation_time.toFixed(1) + 's）'
                 : '';
+            var firstSafeUrl = escapeAttr(current3DViews[0] || '');
 
-            // 将 viewUrls 编码为安全的 JSON 属性
-            var viewUrlsJson = escapeAttr(JSON.stringify(viewUrls));
+            // 编码 URL 参数传给 3D 预览页
+            var viewerUrls = current3DViews.map(encodeURIComponent).join(',');
 
             area.innerHTML =
-                '<div style="margin-bottom:10px;">' +
+                '<div style="margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
                 '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:rgba(0,255,136,0.15);color:#00ff88;font-size:0.75rem;">\ud83d\udd13 Stable Zero123 开源引擎</span>' +
+                '<span style="color:#888;font-size:0.75rem;">' + caption + genTime + '</span>' +
                 '</div>' +
-                '<div class="pano-container" style="aspect-ratio:auto;min-height:200px;padding:12px;">' +
-                '<div style="display:grid;grid-template-columns:' + gridCols + ';gap:8px;width:100%;">' +
-                galleryHtml +
+                // 主图大图展示
+                '<div class="pano-container" style="aspect-ratio:1;max-height:400px;display:flex;align-items:center;justify-content:center;background:#000;position:relative;border-radius:8px;overflow:hidden;">' +
+                '<img id="main3DView" src="' + firstSafeUrl + '" alt="3D 视角" ' +
+                'style="max-width:100%;max-height:100%;object-fit:contain;transition:opacity 0.3s;" ' +
+                'onclick="open3DViewer()" ' +
+                'title="点击打开全屏 3D 预览">' +
+                '<div style="position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.6);padding:4px 10px;border-radius:4px;font-size:0.7rem;color:#00ff88;cursor:pointer;" onclick="open3DViewer()">\ud83c\udf10 全屏 3D 预览</div>' +
+                '<div id="view3DLabel" style="position:absolute;bottom:8px;left:8px;background:rgba(0,0,0,0.6);padding:4px 10px;border-radius:4px;font-size:0.75rem;color:#fff;">' + escapeHtml(viewLabels[0] || '视角 1') + '</div>' +
                 '</div>' +
+                // 缩略图导航
+                '<div style="display:grid;grid-template-columns:repeat(' + Math.min(current3DViews.length, 4) + ',1fr);gap:6px;margin-top:8px;">' +
+                thumbsHtml +
                 '</div>' +
-                '<div style="margin-top:10px;padding:8px;background:rgba(255,255,255,0.05);border-radius:6px;">' +
-                '<p style="color:#aaa;font-size:0.8rem;">' + caption + genTime + '</p>' +
-                '</div>' +
+                // 操作按钮
                 '<div class="result-actions" style="margin-top:12px;">' +
-                '<button class="btn btn-primary" onclick="downloadAllViews(\'' + viewUrlsJson + '\')">\ud83d\udce5 下载所有视角</button>' +
+                '<button class="btn btn-primary" onclick="open3DViewer()">\ud83c\udf10 全屏 3D 预览</button>' +
+                '<button class="btn btn-secondary" onclick="autoRotate3D()" id="rotateBtn">\ud83d\udd04 自动旋转</button>' +
+                '<button class="btn btn-secondary" onclick="downloadAllViews(\'' + escapeAttr(JSON.stringify(viewUrls)) + '\')">\ud83d\udce5 下载所有视角</button>' +
                 '<button class="btn btn-secondary" onclick="copyLink()">\ud83d\udccb 复制链接</button>' +
                 '</div>';
+        }
+
+        function switch3DView(index) {
+            if (index < 0 || index >= current3DViews.length) return;
+            current3DIndex = index;
+            var img = document.getElementById('main3DView');
+            if (img) {
+                img.style.opacity = '0.3';
+                setTimeout(function() {
+                    img.src = current3DViews[index];
+                    img.style.opacity = '1';
+                }, 150);
+            }
+            var label = document.getElementById('view3DLabel');
+            var labels = ['正面视角', '左侧视角', '背面视角', '俯视视角', '右侧视角', '3/4 视角', '特写视角', '广角视角'];
+            if (label) label.textContent = labels[index] || ('视角 ' + (index + 1));
+            // 更新缩略图状态
+            var thumbs = document.querySelectorAll('.view-thumb');
+            thumbs.forEach(function(el, i) {
+                if (i === index) {
+                    el.style.border = '2px solid #00ff88';
+                    el.style.opacity = '1';
+                    el.classList.add('active');
+                } else {
+                    el.style.border = '2px solid transparent';
+                    el.style.opacity = '0.5';
+                    el.classList.remove('active');
+                }
+            });
+        }
+
+        var rotateTimer = null;
+        function autoRotate3D() {
+            var btn = document.getElementById('rotateBtn');
+            if (rotateTimer) {
+                clearInterval(rotateTimer);
+                rotateTimer = null;
+                if (btn) btn.textContent = '\ud83d\udd04 自动旋转';
+                return;
+            }
+            if (btn) btn.textContent = '\u23f8 停止旋转';
+            rotateTimer = setInterval(function() {
+                current3DIndex = (current3DIndex + 1) % current3DViews.length;
+                switch3DView(current3DIndex);
+            }, 1500);
+        }
+
+        function open3DViewer() {
+            var urls = current3DViews.map(encodeURIComponent).join(',');
+            window.open('/3d-viewer.html?views=' + urls, '_blank', 'width=1024,height=768');
         }
 
         // ===== 下载所有视角 =====
@@ -1156,6 +1262,69 @@
             }
         }
 
+        // ===== AI 生成图片 =====
+        async function generateImageFromText() {
+            var prompt = document.getElementById('prompt').value.trim();
+            if (!prompt) {
+                showToast('\u26a0\ufe0f 请先输入提示词', true);
+                return;
+            }
+
+            var btn = document.getElementById('aiGenImgBtn');
+            btn.disabled = true;
+            btn.textContent = '\u23f3 AI 生成图片中...';
+
+            try {
+                var formData = new FormData();
+                formData.append('prompt', prompt);
+
+                var response = await fetch(API_BASE + '/generate-image', {
+                    method: 'POST',
+                    body: formData,
+                    headers: getAuthHeaders()
+                });
+
+                if (!response.ok) {
+                    var errData = null;
+                    try { errData = await response.json(); } catch (e) { /* ignore */ }
+                    var errMsg = errData && errData.error
+                        ? errData.error
+                        : 'HTTP error! status: ' + response.status;
+                    throw new Error(errMsg);
+                }
+
+                var data = await response.json();
+                if (data.success) {
+                    aiGeneratedImageUrl = data.image_url;
+                    var fullUrl = data.image_url.startsWith('http')
+                        ? data.image_url
+                        : (window.location.origin + data.image_url);
+                    document.getElementById('aiGenPreviewImg').src = fullUrl;
+                    document.getElementById('aiImageBox').style.display = 'block';
+
+                    var infoText = '\u23f1 ' + data.generation_time + 's';
+                    if (data.size) infoText += '  |  \ud83d\uddbc ' + data.size;
+                    document.getElementById('aiImageInfo').textContent = infoText;
+
+                    showToast('\u2705 AI 图片生成完成！点击"开始生成"创建 3D');
+                } else {
+                    throw new Error(data.error || '生成失败');
+                }
+            } catch (error) {
+                showError(error.message);
+                showToast('\u26a0\ufe0f 图片生成失败: ' + error.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '\ud83c\udfa8 AI 生成图片';
+            }
+        }
+
+        function removeAiImage() {
+            aiGeneratedImageUrl = null;
+            document.getElementById('aiGenPreviewImg').src = '';
+            document.getElementById('aiImageBox').style.display = 'none';
+        }
+
         // ===== 核心：生成 3D 世界 =====
         async function generateWorld() {
             var mode = currentMode;
@@ -1163,14 +1332,19 @@
                 ? document.getElementById('prompt').value.trim()
                 : document.getElementById('imagePrompt').value.trim();
 
-            if (mode === 'text' && !prompt) {
-                showToast('\u26a0\ufe0f 请输入提示词', true);
-                return;
-            }
-            if (mode === 'image' && !uploadedImageFile) {
-                showToast('\u26a0\ufe0f 请上传图片', true);
-                return;
-            }
+if (mode === 'text' && !prompt) {
+showToast('\u26a0\ufe0f 请输入提示词', true);
+return;
+}
+if (mode === 'image' && !uploadedImageFile) {
+showToast('\u26a0\ufe0f 请上传图片', true);
+return;
+}
+// 文字模式下，如果没有 AI 生成的图片，提示用户
+if (mode === 'text' && !aiGeneratedImageUrl) {
+showToast('\u26a0\ufe0f 文字模式需要先生成图片。请点击「AI 生成图片」按钮，或切换到图片模式上传图片。', true);
+return;
+}
 
             var btn = document.getElementById('generateBtn');
             btn.disabled = true;
@@ -1190,16 +1364,21 @@
                 var engineChoice = document.getElementById('engineSelect')
                     ? document.getElementById('engineSelect').value
                     : 'auto';
-                var formData = new FormData();
-                formData.append('prompt', prompt || '');
-                formData.append('use_local_llm', useLlm && llmAvailable ? 'true' : 'false');
-                formData.append('engine', engineChoice);
+var formData = new FormData();
+formData.append('prompt', prompt || '');
+formData.append('use_local_llm', useLlm && llmAvailable ? 'true' : 'false');
+formData.append('engine', engineChoice);
 
-                if (mode === 'image' && uploadedImageFile) {
-                    formData.append('image', uploadedImageFile);
-                }
+if (mode === 'image' && uploadedImageFile) {
+formData.append('image', uploadedImageFile);
+}
 
-                var response = await fetch(API_BASE + '/create', {
+// 文字模式：如果有 AI 生成的图片，传递 URL
+if (mode === 'text' && aiGeneratedImageUrl) {
+formData.append('image_url', aiGeneratedImageUrl);
+}
+
+var response = await fetch(API_BASE + '/create', {
                     method: 'POST',
                     body: formData,
                     headers: getAuthHeaders(),
@@ -1247,6 +1426,7 @@
                 showError(error.message);
                 showToast('\u26a0\ufe0f 生成失败: ' + error.message, true);
             } finally {
+                stopLoadingTimer();
                 btn.disabled = false;
                 btn.textContent = '\ud83d\ude80 开始生成';
             }

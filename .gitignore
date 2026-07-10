@@ -47,6 +47,16 @@ Thumbs.db
 # Uploads (temporary files)
 uploads/*
 !uploads/.gitkeep
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Generated 3D views (output artifacts)
+backend/generated_3d_views/*
+!backend/generated_3d_views/.gitkeep
+
+# Temporary test files
+_test_api.py
+backend/_test_route.py
 
 # Flask
 instance/
@@ -63,3 +73,7 @@ htmlcov/
 # Misc
 *.bak
 *.tmp
+
+# HF cache
+hf_cache/
+D:\hf_cache

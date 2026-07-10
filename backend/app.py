@@ -36,6 +36,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
 # 注册蓝图
 app.register_blueprint(world_bp, url_prefix='/api')
 
+# 文生图生成器已在 routes/world.py 中注册，无需重复定义
 
 # 提供上传文件的访问
 @app.route('/uploads/<path:filename>')
