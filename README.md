@@ -374,19 +374,23 @@ docker run -p 5000:5000 --env-file .env marble-3d-service
 marble-3d-service/
 ├── backend/                # Flask 后端
 │   ├── app.py            # 主应用
+│   ├── extensions.py     # Flask 扩展实例（limiter）
 │   ├── routes/           # 路由
-│   │   └── world.py     # World Labs API 路由
-│   ├── utils/            # 工具函数
-│   ├── models/           # 数据模型
-│   ├── static/           # 静态文件（前端）
-│   ├── uploads/          # 上传文件目录
+│   │   └── world.py     # API 路由（引擎选择/生成/任务轮询）
+│   ├── utils/            # 工具（智能选择器/Stable Zero123/文生图）
+│   ├── tests/            # pytest 自动化测试 + manual_api_check.py 手动集成测试
+│   ├── generated_3d_views/ # Stable Zero123 生成结果
 │   ├── requirements.txt  # Python 依赖
 │   ├── .env.example      # 环境变量示例
 │   ├── Dockerfile        # Docker 配置
 │   └── docker-compose.yml # Docker Compose 配置
-├── frontend/             # 前端（可选）
-│   └── index.html       # 前端页面
-├── uploads/              # 上传文件（符号链接到 backend/uploads）
+├── frontend/             # 前端
+│   ├── index.html       # 主页面
+│   ├── style.css        # 样式
+│   ├── app.js           # 页面逻辑
+│   ├── 3d-viewer.html   # 3D 多视角预览页
+│   └── favicon.svg
+├── uploads/              # 上传文件目录
 ├── .gitignore           # Git 忽略文件
 └── README.md            # 项目文档
 ```
@@ -396,6 +400,12 @@ marble-3d-service/
 ```bash
 cd backend
 pytest tests/
+```
+
+手动集成测试（需先启动服务）：
+
+```bash
+python tests/manual_api_check.py
 ```
 
 ### 代码格式化

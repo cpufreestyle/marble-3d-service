@@ -38,28 +38,38 @@ app.register_blueprint(world_bp, url_prefix='/api')
 
 # 文生图生成器已在 routes/world.py 中注册，无需重复定义
 
+
 # 提供上传文件的访问
 @app.route('/uploads/<path:filename>')
 def serve_uploads(filename):
-    return send_from_directory(os.path.abspath(UPLOAD_DIR), filename)
+    response = send_from_directory(os.path.abspath(UPLOAD_DIR), filename)
+    response.headers['Cache-Control'] = 'public, max-age=3600'
+    return response
 
 
 # 提供 Stable Zero123 生成文件的访问
 @app.route('/generated_3d_views/<path:filename>')
 def serve_generated_3d(filename):
-    return send_from_directory(os.path.abspath(GENERATED_3D_DIR), filename)
+    response = send_from_directory(os.path.abspath(GENERATED_3D_DIR), filename)
+    response.headers['Cache-Control'] = 'public, max-age=3600'
+    return response
 
 
 # 根路由
 @app.route('/')
 def index():
-    return send_from_directory(FRONTEND_DIR, 'index.html')
+    response = send_from_directory(FRONTEND_DIR, 'index.html')
+    # HTML 不缓存，保证发布新版后立即生效；CSS/JS 走 1h 缓存
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
 
 
 # 静态文件
 @app.route('/<path:filename>')
 def static_files(filename):
-    return send_from_directory(FRONTEND_DIR, filename)
+    response = send_from_directory(FRONTEND_DIR, filename)
+    response.headers['Cache-Control'] = 'public, max-age=3600'
+    return response
 
 
 # 健康检查

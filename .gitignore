@@ -77,3 +77,7 @@ htmlcov/
 # HF cache
 hf_cache/
 D:\hf_cache
+
+# Codely CLI (local tooling config & memory)
+.codely-cli/
+CODELY.md

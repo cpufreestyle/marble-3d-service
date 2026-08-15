@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3D 多视角预览</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -172,6 +173,18 @@
         var rotateTimer = null;
         var labels = ['正面视角', '左侧视角', '背面视角', '俯视视角', '右侧视角', '3/4 视角', '特写视角', '广角视角'];
 
+        // ===== XSS 防护：HTML 转义 =====
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            var div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
+        }
+
+        function escapeAttr(text) {
+            return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
         // 解析 URL 参数
         var params = new URLSearchParams(window.location.search);
         var viewsParam = params.get('views');
@@ -191,9 +204,10 @@
                 var div = document.createElement('div');
                 div.className = 'thumb' + (i === 0 ? ' active' : '');
                 div.onclick = function() { switchView(i); };
+                var label = labels[i] || ('视角 ' + (i + 1));
                 div.innerHTML =
-                    '<img src="' + url + '" alt="视角 ' + (i + 1) + '">' +
-                    '<div class="thumb-label">' + (labels[i] || ('视角 ' + (i + 1))) + '</div>';
+                    '<img src="' + escapeAttr(url) + '" alt="' + escapeAttr(label) + '" loading="lazy" decoding="async">' +
+                    '<div class="thumb-label">' + escapeHtml(label) + '</div>';
                 thumbsEl.appendChild(div);
             });
 

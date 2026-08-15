@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import requests
-from flask import Blueprint, request, jsonify, send_from_directory
+from flask import Blueprint, request, jsonify
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -167,8 +167,28 @@ def save_uploaded_image(image_file):
     return filepath, image_url
 
 
+# 本地 LLM 检测缓存：探测需同步请求 LM Studio / Ollama（各 2s 超时），
+# 不缓存时每次请求最坏引入 ~4s 延迟
+_LLM_CHECK_TTL = 60  # 秒
+_llm_check_cache = {'expires': 0.0, 'result': (None, None)}
+_llm_check_lock = threading.Lock()
+
+
 def check_local_llm():
-    """检测可用的本地 LLM"""
+    """检测可用的本地 LLM（结果缓存 60 秒）"""
+    with _llm_check_lock:
+        if time.time() < _llm_check_cache['expires']:
+            return _llm_check_cache['result']
+
+    result = _probe_local_llm()
+    with _llm_check_lock:
+        _llm_check_cache['result'] = result
+        _llm_check_cache['expires'] = time.time() + _LLM_CHECK_TTL
+    return result
+
+
+def _probe_local_llm():
+    """实际探测 LM Studio / Ollama"""
     # 检查 LM Studio
     try:
         r = requests.get(f'{LM_STUDIO_URL}/models', timeout=2)
@@ -372,38 +392,6 @@ def _handle_stable_3d(image_to_process, final_prompt, saved_filename=None):
         logging.error(f"Stable Zero123处理失败: {e}")
         return None  # 降级
 
-        if image_to_process:
-            loop = get_asyncio_loop()
-            stable_result = asyncio.run_coroutine_threadsafe(
-                stable_3d_generator.generate_3d_from_image(
-                    image_to_process,
-                    final_prompt or "a 3D model"
-                ), loop
-            ).result(timeout=600.0)
-
-            if stable_result.get('success'):
-                return jsonify({
-                    'success': True,
-                    'engine_used': 'stable-zero123',
-                    'generation_type': 'multi_view_3d',
-                    'result': stable_result,
-                    'task_id': f"stable3d_{uuid.uuid4().hex[:8]}",
-                    'status': 'completed',
-                    'message': '使用Stable Zero123生成了多视角3D视图'
-                }), 200
-            else:
-                logging.warning(
-                    f"Stable Zero123失败，降级到World Labs: "
-                    f"{stable_result.get('error')}"
-                )
-                return None  # 降级
-
-    except Exception as e:
-        logging.error(f"Stable Zero123处理失败: {e}")
-        return None  # 降级
-
-    return None
-
 
 def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
     """
@@ -464,10 +452,6 @@ def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
         }), response.status_code
 
 
-# 用于 Stable Zero123 读取已保存文件的文件名记录（线程不安全，建议移除）
-# _last_saved_filename = None  # 废弃
-
-
 # ===== 路由 =====
 @world_bp.route('/llm-status', methods=['GET'])
 def get_llm_status():
@@ -525,12 +509,6 @@ def upload_image():
     except Exception as e:
         logging.error(f"图片上传失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@world_bp.route('/uploads/<path:filename>')
-def serve_upload(filename):
-    """提供上传文件的访问"""
-    return send_from_directory(UPLOAD_DIR, filename)
 
 
 @world_bp.route('/generate-image', methods=['POST'])

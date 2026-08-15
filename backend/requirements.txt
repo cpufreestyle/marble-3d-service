@@ -19,9 +19,6 @@ psutil>=5.9.0
 # Production server
 gunicorn>=21.0.0
 
-# Utilities
-python-dateutil>=2.8.2
-
 # ===== 开源3D模型依赖（可选，用于Stable Zero123） =====
 # 安装方式: pip install -r requirements-open-source.txt
 # 或者取消下面注释直接安装
