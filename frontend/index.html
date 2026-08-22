@@ -39,6 +39,7 @@
                         <span class="api-status" id="llmStatus">检测中...</span>
                         <input type="checkbox" id="useLlmToggle" checked onchange="toggleLlm()" style="width: 16px; height: 16px; cursor: pointer;" aria-label="启用本地 AI 优化">
                     </div>
+                    <select id="llmModelSelect" class="engine-select" style="display:none;margin-top:8px;" aria-label="选择本地 LLM 模型"></select>
                 </div>
 
                 <!-- 3D生成引擎选择 -->
@@ -48,6 +49,12 @@
                         <option value="stable_3d" selected>🔓 Stable Zero123（默认）</option>
                         <option value="auto">🧠 自动选择</option>
                         <option value="world_labs">🌍 World Labs（高质量）</option>
+                    </select>
+                    <select id="backendSelect" class="engine-select" style="margin-top:8px;" aria-label="选择 3D 生成后端">
+                        <option value="auto" selected>⚡ 后端自动（按硬件选择）</option>
+                        <option value="zero123plus">🚀 Zero123++（6 视角，需 GPU）</option>
+                        <option value="stable-zero123">🧊 Stable Zero123（需 GPU）</option>
+                        <option value="sd-img2img">🎨 SD img2img（CPU 可用）</option>
                     </select>
                 </div>
 
@@ -73,8 +80,18 @@
                         <div id="enhancedPromptText"></div>
                     </div>
 
+                    <!-- 文生图模型与分辨率 -->
+                    <div style="display:flex;gap:8px;margin-top:10px;">
+                        <select id="t2iModelSelect" class="engine-select" style="flex:1;" aria-label="选择文生图模型"></select>
+                        <select id="t2iSizeSelect" class="engine-select" style="max-width:110px;" aria-label="选择分辨率">
+                            <option value="512">512px</option>
+                            <option value="768">768px</option>
+                            <option value="1024">1024px</option>
+                        </select>
+                    </div>
+
                     <!-- AI 生成图片按钮 -->
-                    <button class="btn btn-secondary" id="aiGenImgBtn" onclick="generateImageFromText()" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);color:#00ff88;" aria-label="用 AI 生成图片">
+                    <button class="btn btn-secondary" id="aiGenImgBtn" onclick="generateImageFromText()" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);color:#00ff88;margin-top:12px;" aria-label="用 AI 生成图片">
                         🎨 AI 生成图片
                     </button>
 

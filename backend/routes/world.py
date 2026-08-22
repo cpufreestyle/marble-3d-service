@@ -22,6 +22,7 @@ from PIL import Image
 from utils.smart_selector import SmartEngineSelector, GenerationEngine
 from utils.stable_3d_generator import Stable3DGenerator
 from utils.text_to_image import TextToImageGenerator
+from utils.local_llm import LocalLLMClient
 from extensions import limiter
 
 # 加载环境变量
@@ -39,10 +40,6 @@ if not API_KEY:
 
 API_URL = 'https://api.worldlabs.ai/marble/v1'
 
-# 本地 LLM 配置
-LM_STUDIO_URL = os.environ.get('LM_STUDIO_URL', 'http://localhost:1234/v1')
-OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
-
 # 上传目录（与 app.py 一致：项目根目录/uploads/）
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'uploads')
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
@@ -54,6 +51,9 @@ ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 smart_selector = SmartEngineSelector()
 stable_3d_generator = Stable3DGenerator()
 text_to_image_generator = TextToImageGenerator()
+
+# 通用本地 LLM 客户端（LM Studio / vLLM / llama.cpp / Ollama / 任意 OpenAI 兼容端点）
+llm_client = LocalLLMClient()
 
 # 配置日志
 logging.basicConfig(
@@ -167,113 +167,12 @@ def save_uploaded_image(image_file):
     return filepath, image_url
 
 
-# 本地 LLM 检测缓存：探测需同步请求 LM Studio / Ollama（各 2s 超时），
-# 不缓存时每次请求最坏引入 ~4s 延迟
-_LLM_CHECK_TTL = 60  # 秒
-_llm_check_cache = {'expires': 0.0, 'result': (None, None)}
-_llm_check_lock = threading.Lock()
-
-
-def check_local_llm():
-    """检测可用的本地 LLM（结果缓存 60 秒）"""
-    with _llm_check_lock:
-        if time.time() < _llm_check_cache['expires']:
-            return _llm_check_cache['result']
-
-    result = _probe_local_llm()
-    with _llm_check_lock:
-        _llm_check_cache['result'] = result
-        _llm_check_cache['expires'] = time.time() + _LLM_CHECK_TTL
-    return result
-
-
-def _probe_local_llm():
-    """实际探测 LM Studio / Ollama"""
-    # 检查 LM Studio
-    try:
-        r = requests.get(f'{LM_STUDIO_URL}/models', timeout=2)
-        if r.status_code == 200:
-            logging.info(f"检测到 LM Studio: {LM_STUDIO_URL}")
-            return 'lmstudio', LM_STUDIO_URL
-    except Exception as e:
-        logging.debug(f"LM Studio 检测失败: {e}")
-
-    # 检查 Ollama
-    try:
-        r = requests.get(f'{OLLAMA_URL}/api/tags', timeout=2)
-        if r.status_code == 200:
-            data = r.json()
-            if data.get('models'):
-                logging.info(f"检测到 Ollama: {OLLAMA_URL}")
-                return 'ollama', OLLAMA_URL
-    except Exception as e:
-        logging.debug(f"Ollama 检测失败: {e}")
-
-    return None, None
-
-
-def enhance_prompt_with_local_llm(prompt, llm_type, llm_url):
-    """使用本地 LLM 优化提示词"""
-    system_prompt = """你是一个 3D 世界生成专家。用户的中文描述会被翻译成英文，并添加细节让 3D 场景更生动。
-
-规则：
-1. 翻译成英文
-2. 添加环境细节（光照、氛围、材质）
-3. 保持简洁，不超过 100 个单词
-4. 直接输出优化后的英文提示词，不要解释
-
-示例：
-输入: 一只可爱的橘猫坐在阳光明媚的窗台上
-输出: A cute orange tabby cat sitting on a sunlit windowsill, soft morning light
-streaming through lace curtains, warm cozy atmosphere, wooden window frame,
-indoor plants nearby, photorealistic, soft shadows, golden hour lighting"""
-
-    try:
-        if llm_type == 'lmstudio':
-            response = requests.post(
-                f'{llm_url}/chat/completions',
-                json={
-                    'model': 'local-model',
-                    'messages': [
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': prompt}
-                    ],
-                    'temperature': 0.7,
-                    'max_tokens': 200
-                },
-                timeout=30
-            )
-            if response.status_code == 200:
-                enhanced = response.json()['choices'][0]['message']['content']
-                logging.info(f"LM Studio 提示词优化成功: {prompt[:50]}...")
-                return enhanced
-
-        elif llm_type == 'ollama':
-            response = requests.post(
-                f'{llm_url}/api/generate',
-                json={
-                    'model': 'qwen2.5:7b',
-                    'prompt': f"{system_prompt}\n\n输入: {prompt}\n输出:",
-                    'stream': False
-                },
-                timeout=30
-            )
-            if response.status_code == 200:
-                enhanced = response.json().get('response', prompt)
-                logging.info(f"Ollama 提示词优化成功: {prompt[:50]}...")
-                return enhanced
-
-    except Exception as e:
-        logging.warning(f"本地 LLM 调用失败: {e}")
-
-    return None
-
-
 # ===== create_world 拆分后的子函数 =====
 def _parse_create_request():
     """
     解析 /create 请求参数。
-    返回 dict: {prompt, use_local_llm, engine_preference, image_file, image_url}
+    返回 dict: {prompt, use_local_llm, engine_preference, image_file, image_url,
+                llm_model, three_d_backend}
     """
     result = {
         'prompt': '',
@@ -281,6 +180,8 @@ def _parse_create_request():
         'engine_preference': 'stable_3d',
         'image_file': None,
         'image_url': None,
+        'llm_model': '',
+        'three_d_backend': '',
     }
 
     if request.content_type and 'multipart/form-data' in request.content_type:
@@ -291,17 +192,21 @@ def _parse_create_request():
         result['engine_preference'] = request.form.get('engine', 'auto')
         result['image_file'] = request.files.get('image')
         result['image_url'] = request.form.get('image_url')
+        result['llm_model'] = request.form.get('llm_model', '').strip()
+        result['three_d_backend'] = request.form.get('three_d_backend', '').strip()
     elif request.is_json:
         data = request.get_json(silent=True) or {}
         result['prompt'] = data.get('prompt', '')
         result['use_local_llm'] = data.get('use_local_llm', True)
         result['engine_preference'] = data.get('engine', 'auto')
         result['image_url'] = data.get('image_url')
+        result['llm_model'] = (data.get('llm_model') or '').strip()
+        result['three_d_backend'] = (data.get('three_d_backend') or '').strip()
 
     return result
 
 
-def _enhance_prompt(prompt, use_local_llm):
+def _enhance_prompt(prompt, use_local_llm, llm_model=None):
     """
     使用本地 LLM 优化提示词。
     返回 (final_prompt, llm_used)
@@ -309,14 +214,12 @@ def _enhance_prompt(prompt, use_local_llm):
     if not (use_local_llm and prompt):
         return prompt, None
 
-    llm_type, llm_url = check_local_llm()
-    if not llm_type:
-        return prompt, None
-
-    enhanced = enhance_prompt_with_local_llm(prompt, llm_type, llm_url)
+    enhanced, llm_used = llm_client.enhance_prompt(
+        prompt, model_override=llm_model or None
+    )
     if enhanced:
-        logging.info(f"使用 {llm_type} 优化提示词: {prompt} -> {enhanced}")
-        return enhanced, llm_type
+        logging.info(f"使用 {llm_used} 优化提示词: {prompt} -> {enhanced}")
+        return enhanced, llm_used
 
     return prompt, None
 
@@ -327,15 +230,12 @@ def _select_engine(final_prompt, has_image, engine_preference):
     返回 selected_engine
     """
     try:
-        loop = get_asyncio_loop()
-        selection_result = asyncio.run_coroutine_threadsafe(
-            smart_selector.select_best_engine(
-                prompt=final_prompt,
-                has_image=has_image,
-                user_preference=engine_preference,
-                urgency_level=2
-            ), loop
-        ).result(timeout=5.0)
+        selection_result = smart_selector.select_best_engine(
+            prompt=final_prompt,
+            has_image=has_image,
+            user_preference=engine_preference,
+            urgency_level=2
+        )
 
         selected_engine = selection_result.selected_engine
         logging.info(
@@ -349,10 +249,11 @@ def _select_engine(final_prompt, has_image, engine_preference):
         return GenerationEngine.STABLE_3D
 
 
-def _handle_stable_3d(image_to_process, final_prompt, saved_filename=None):
+def _handle_stable_3d(image_to_process, final_prompt, backend=None):
     """
-    处理 Stable Zero123 引擎的 3D 生成。
+    处理 Stable Zero123 系引擎的 3D 生成。
     image_to_process: PIL.Image 对象（由调用方传入）
+    backend: three_d_backend 请求参数（None 表示使用服务端默认）
     返回 dict: {success, data, status_code} 或 None 表示降级到 World Labs
     """
     if image_to_process is None:
@@ -364,7 +265,8 @@ def _handle_stable_3d(image_to_process, final_prompt, saved_filename=None):
         stable_result = asyncio.run_coroutine_threadsafe(
             stable_3d_generator.generate_3d_from_image(
                 image_to_process,
-                final_prompt or "a 3D model"
+                final_prompt or "a 3D model",
+                backend=backend or None
             ), loop
         ).result(timeout=600.0)
 
@@ -457,18 +359,24 @@ def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
 def get_llm_status():
     """获取本地 LLM 状态"""
     try:
-        llm_type, llm_url = check_local_llm()
-        if llm_type:
+        info = llm_client.detect()
+        if info['available']:
             return jsonify({
                 'success': True,
                 'available': True,
-                'type': llm_type,
-                'url': llm_url
+                'type': info['provider'],
+                'url': info['base_url'],
+                'model': info['model'],
+                'models': info['models'],
             })
         return jsonify({
             'success': True,
             'available': False,
-            'message': '未检测到本地 LLM。请在 LM Studio 启动 Local Server (端口 1234) 或运行 Ollama。'
+            'message': info.get(
+                'reason',
+                '未检测到本地 LLM。请启动 LM Studio / Ollama / vLLM 等本地服务，'
+                '或通过 LLM_BASE_URL 指定任意 OpenAI 兼容端点。'
+            )
         })
     except Exception as e:
         logging.error(f"检查 LLM 状态失败: {e}")
@@ -476,6 +384,42 @@ def get_llm_status():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@world_bp.route('/models', methods=['GET'])
+def list_models():
+    """列出可用的本地部署模型（LLM / 文生图 / 3D 生成）"""
+    try:
+        llm_info = llm_client.detect()
+        t2i_info = text_to_image_generator.get_info()
+        stable_3d_info = stable_3d_generator.get_model_info()
+
+        return jsonify({
+            'success': True,
+            'llm': {
+                'available': llm_info['available'],
+                'provider': llm_info.get('provider'),
+                'model': llm_info.get('model'),
+                'models': llm_info.get('models', []),
+            },
+            'text_to_image': {
+                'available': t2i_info.get('is_loaded') or True,
+                'model': t2i_info.get('model_id'),
+                'models': text_to_image_generator.get_available_models(),
+                'pipeline': t2i_info.get('pipeline'),
+                'default_params': text_to_image_generator.get_default_params(),
+            },
+            'three_d': {
+                'available': True,
+                'backend': stable_3d_info.get('effective_backend')
+                or stable_3d_info.get('configured_backend'),
+                'available_backends': stable_3d_info.get('available_backends', []),
+                'device': stable_3d_info.get('device'),
+            },
+        })
+    except Exception as e:
+        logging.error(f"获取模型列表失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @world_bp.route('/upload-image', methods=['POST'])
@@ -511,28 +455,84 @@ def upload_image():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _parse_generate_image_params():
+    """解析 /generate-image 的请求参数（multipart 与 JSON 通用）"""
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+    else:
+        data = request.form
+
+    params = {
+        'prompt': (data.get('prompt') or '').strip(),
+        'model': (data.get('model') or '').strip() or None,
+    }
+
+    def _int_field(name, default):
+        raw = data.get(name)
+        if raw in (None, ''):
+            return default, None
+        try:
+            return int(raw), None
+        except (TypeError, ValueError):
+            return default, f'参数 {name} 必须是整数'
+
+    for key in ('width', 'height'):
+        params[key], err = _int_field(key, None)
+        if err:
+            return params, err
+    params['num_inference_steps'], err = _int_field('num_inference_steps', None)
+    if err:
+        return params, err
+    return params, None
+
+
+def _validate_generate_image_params(params):
+    """校验文生图参数，返回 error 字符串或 None"""
+    if not params['prompt']:
+        return '请输入提示词'
+
+    for key, lo, hi in (
+        ('width', 256, 1024),
+        ('height', 256, 1024),
+        ('num_inference_steps', 1, 60),
+    ):
+        value = params[key]
+        if value is not None and not (lo <= value <= hi):
+            return f'参数 {key} 超出范围 [{lo}, {hi}]'
+    # SD 要求宽高为 8 的倍数
+    for key in ('width', 'height'):
+        value = params[key]
+        if value is not None and value % 8 != 0:
+            return f'参数 {key} 必须是 8 的倍数'
+    return None
+
+
 @world_bp.route('/generate-image', methods=['POST'])
 @limiter.limit("5 per minute")
 def generate_image():
-    """使用 Stable Diffusion 从文本提示词生成图片"""
+    """使用本地 Stable Diffusion / SDXL 从文本提示词生成图片"""
     try:
-        # 支持 multipart/form-data 和 JSON
-        if request.content_type and 'multipart/form-data' in request.content_type:
-            prompt = request.form.get('prompt', '').strip()
-        elif request.is_json:
-            prompt = (request.get_json(silent=True) or {}).get('prompt', '').strip()
-        else:
-            prompt = request.form.get('prompt', '').strip()
+        params, parse_err = _parse_generate_image_params()
+        if parse_err:
+            return jsonify({'success': False, 'error': parse_err}), 400
 
-        if not prompt:
-            return jsonify({
-                'success': False,
-                'error': '请输入提示词'
-            }), 400
+        validation_err = _validate_generate_image_params(params)
+        if validation_err:
+            return jsonify({'success': False, 'error': validation_err}), 400
 
-        logging.info(f"文生图请求: {prompt[:100]}")
+        logging.info(
+            f"文生图请求: {params['prompt'][:100]} "
+            f"(model={params['model']}, {params['width']}x{params['height']}, "
+            f"steps={params['num_inference_steps']})"
+        )
 
-        result = text_to_image_generator.generate_image(prompt=prompt)
+        result = text_to_image_generator.generate_image(
+            prompt=params['prompt'],
+            model_id=params['model'],
+            width=params['width'],
+            height=params['height'],
+            num_inference_steps=params['num_inference_steps'],
+        )
 
         if result.get('success'):
             return jsonify(result), 200
@@ -578,7 +578,9 @@ def create_world():
             }), 400
 
         # ========== 2. 本地 LLM 优化提示词 ==========
-        final_prompt, llm_used = _enhance_prompt(prompt, use_local_llm)
+        final_prompt, llm_used = _enhance_prompt(
+            prompt, use_local_llm, llm_model=params['llm_model']
+        )
 
         # ========== 3. 智能引擎选择 ==========
         has_image = bool(image_file or image_url)
@@ -598,7 +600,9 @@ def create_world():
                 if os.path.exists(local_path):
                     image_to_process = Image.open(local_path)
 
-            result = _handle_stable_3d(image_to_process, final_prompt)
+            result = _handle_stable_3d(
+                image_to_process, final_prompt, backend=params['three_d_backend']
+            )
             if result and result['success']:
                 # 补充额外字段
                 resp_data = result['data']

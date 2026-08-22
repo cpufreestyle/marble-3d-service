@@ -46,8 +46,63 @@ document.addEventListener('DOMContentLoaded', async function () {
         userApiKey = savedKey;
     }
     await checkLlmStatus();
+    loadModels();
     initImageUpload();
 });
+
+// ===== 拉取可用本地模型并填充下拉框 =====
+async function loadModels() {
+    try {
+        const response = await fetch(API_BASE + '/models');
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!data.success) return;
+
+        // LLM 模型（多模型时显示下拉框）
+        const llmSel = document.getElementById('llmModelSelect');
+        if (data.llm && data.llm.available && data.llm.models && data.llm.models.length > 1) {
+            llmSel.innerHTML = data.llm.models.map(function (m) {
+                return '<option value="' + escapeAttr(m) + '"' +
+                    (m === data.llm.model ? ' selected' : '') + '>' +
+                    escapeHtml(m) + '</option>';
+            }).join('');
+            llmSel.style.display = 'block';
+        }
+
+        // 3D 后端（不可用的置灰并附原因）
+        const backendSel = document.getElementById('backendSelect');
+        ((data.three_d && data.three_d.available_backends) || []).forEach(function (b) {
+            const opt = backendSel.querySelector('option[value="' + b.name + '"]');
+            if (opt && !b.available) {
+                opt.disabled = true;
+                opt.textContent += '（不可用: ' + (b.reason || '未知') + '）';
+            }
+        });
+
+        // 文生图模型 + 默认分辨率
+        const t2iSel = document.getElementById('t2iModelSelect');
+        const sizeSel = document.getElementById('t2iSizeSelect');
+        const models = (data.text_to_image && data.text_to_image.models) || [];
+        t2iSel.innerHTML = models.map(function (m) {
+            return '<option value="' + escapeAttr(m.id) + '"' +
+                (m.is_current ? ' selected' : '') + '>' +
+                escapeHtml(m.label) + '</option>';
+        }).join('');
+        const current = models.find(function (m) { return m.is_current; });
+        if (current && sizeSel) {
+            sizeSel.value = String(current.default_size || 512);
+        }
+        // 切换文生图模型时同步推荐分辨率
+        t2iSel.addEventListener('change', function () {
+            const selected = models.find(function (m) { return m.id === t2iSel.value; });
+            if (selected && sizeSel) {
+                sizeSel.value = String(selected.default_size || 512);
+            }
+        });
+    } catch (e) {
+        console.error('Load models failed:', e);
+    }
+}
 
 // ===== 检测本地 LLM =====
 async function checkLlmStatus() {
@@ -485,6 +540,17 @@ async function generateImageFromText() {
         var formData = new FormData();
         formData.append('prompt', prompt);
 
+        // 附加所选文生图模型与分辨率
+        var t2iModelSel = document.getElementById('t2iModelSelect');
+        var t2iSizeSel = document.getElementById('t2iSizeSelect');
+        if (t2iModelSel && t2iModelSel.value) {
+            formData.append('model', t2iModelSel.value);
+        }
+        if (t2iSizeSel && t2iSizeSel.value) {
+            formData.append('width', t2iSizeSel.value);
+            formData.append('height', t2iSizeSel.value);
+        }
+
         var response = await fetch(API_BASE + '/generate-image', {
             method: 'POST',
             body: formData,
@@ -578,6 +644,16 @@ async function generateWorld() {
         formData.append('prompt', prompt || '');
         formData.append('use_local_llm', useLlm && llmAvailable ? 'true' : 'false');
         formData.append('engine', engineChoice);
+
+        // 附加所选 LLM 模型与 3D 后端
+        var llmModelSel = document.getElementById('llmModelSelect');
+        var backendSel = document.getElementById('backendSelect');
+        if (llmModelSel && llmModelSel.style.display !== 'none' && llmModelSel.value) {
+            formData.append('llm_model', llmModelSel.value);
+        }
+        if (backendSel && backendSel.value) {
+            formData.append('three_d_backend', backendSel.value);
+        }
 
         if (mode === 'image' && uploadedImageFile) {
             formData.append('image', uploadedImageFile);

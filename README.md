@@ -220,23 +220,64 @@ docker run -p 5000:5000 --env-file .env marble-3d-service
 
 ---
 
-## 🤖 本地 LLM 支持（可选）
+## 🤖 本地部署模型支持（可选）
 
-服务支持使用本地 LLM（LM Studio 或 Ollama）优化中文提示词：
+服务全面支持本地部署模型，保护数据隐私，无需云端 API。
 
-### LM Studio
+### 本地 LLM（提示词优化）
 
-1. 下载并安装 [LM Studio](https://lmstudio.ai/)
-2. 加载一个模型（推荐 Qwen2.5 7B 或类似模型）
-3. 启动 Local Server（默认端口 `1234`）
-4. 服务将自动检测并使用
+支持**任意 OpenAI 兼容端点**，通过 `.env` 配置：
 
-### Ollama
+```bash
+LLM_PROVIDER=auto              # auto | openai-compatible | lmstudio | vllm | llamacpp | ollama
+LLM_BASE_URL=                  # 自定义端点（须含 /v1，如 vLLM: http://localhost:8000/v1）
+LLM_MODEL=                     # 模型名（留空自动选择探测到的第一个模型）
+LLM_TEMPERATURE=0.7
+LLM_TIMEOUT=30
+```
 
-1. 下载并安装 [Ollama](https://ollama.com/)
-2. 运行 `ollama serve`（默认端口 `11434`）
-3. 拉取模型：`ollama pull qwen2.5:7b`
-4. 服务将自动检测并使用
+**LM Studio**
+
+1. 下载并安装 [LM Studio](https://lmstudio.ai/)，加载模型并启动 Local Server（默认端口 `1234`）
+
+**Ollama**
+
+1. 下载并安装 [Ollama](https://ollama.com/)，运行 `ollama serve`，拉取模型 `ollama pull qwen2.5:7b`（实际模型自动从 `/api/tags` 探测，无需硬编码）
+
+**vLLM / llama.cpp / 其他 OpenAI 兼容服务**
+
+1. 启动服务后设置 `LLM_PROVIDER=openai-compatible` 与 `LLM_BASE_URL`（须含 `/v1`）
+
+探测结果缓存 60 秒，避免每次请求重复探测。
+
+### 3D 生成后端（图片转多视角）
+
+```bash
+STABLE_3D_BACKEND=auto         # auto | zero123plus | stable-zero123 | sd-img2img
+```
+
+| 后端 | 模型 | 要求 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `zero123plus` | sudo-ai/zero123plus-v1.2 | 6GB+ 显存 GPU | Zero123++，单次生成 6 视角 |
+| `stable-zero123` | ds8nh/Stable-Zero123 | 6GB+ 显存 GPU | 按方位角逐视角生成 |
+| `sd-img2img` | stable-diffusion-v1-5 | CPU 可用 | 兜底后端，多视角提示词生成 |
+
+`auto` 模式按 GPU 显存自动降级（无 GPU 时使用 sd-img2img）。可通过 `STABLE_3D_ZERO123PLUS_MODEL` / `STABLE_3D_ZERO123_MODEL` / `STABLE_3D_MODEL_PATH` 自定义各后端模型。
+
+### 文生图（SD1.5 / SDXL）
+
+```bash
+TEXT_TO_IMAGE_MODEL=stable-diffusion-v1-5/stable-diffusion-v1-5
+TEXT_TO_IMAGE_PIPELINE=auto    # auto | sd15 | sdxl（按模型名自动识别）
+```
+
+支持运行时切换模型（前端下拉框或 `model` 请求参数），分辨率（256-1024，8 的倍数）与步数（1-60）可通过请求参数覆盖。SDXL Turbo 系模型自动跳过 guidance_scale。
+
+### 模型选择 API 与前端 UI
+
+- `GET /api/models` — 列出 LLM / 文生图 / 3D 后端的可用模型与硬件适配状态
+- 前端页面自动加载该接口，填充模型下拉框：LLM 模型、3D 生成后端（不可用选项置灰并显示原因）、文生图模型与分辨率
+- `POST /api/create` 支持 `llm_model`、`three_d_backend` 参数；`POST /api/generate-image` 支持 `model`、`width`、`height`、`num_inference_steps`
 
 ---
 
@@ -255,6 +296,8 @@ docker run -p 5000:5000 --env-file .env marble-3d-service
 | `api_key` | string | 否 | 自定义 World Labs API Key |
 | `use_local_llm` | boolean | 否 | 是否使用本地 LLM 优化提示词（默认 `true`） |
 | `engine` | string | 否 | 指定生成引擎: `world_labs`, `stable_3d`, `auto`（默认） |
+| `llm_model` | string | 否 | 指定本地 LLM 模型（见 `GET /api/models`） |
+| `three_d_backend` | string | 否 | 指定 3D 后端: `zero123plus`, `stable-zero123`, `sd-img2img`, `auto` |
 
 *注：`prompt` 和 `image` 至少提供一个
 
@@ -360,9 +403,63 @@ docker run -p 5000:5000 --env-file .env marble-3d-service
   "success": true,
   "available": true,
   "type": "lmstudio",
-  "url": "http://localhost:1234"
+  "url": "http://localhost:1234",
+  "model": "qwen2.5-7b-instruct",
+  "models": ["qwen2.5-7b-instruct"]
 }
 ```
+
+---
+
+### GET `/api/models`
+
+列出可用的本地部署模型（LLM / 文生图 / 3D 生成后端）
+
+**响应：**
+
+```json
+{
+  "success": true,
+  "llm": {
+    "available": true,
+    "provider": "ollama",
+    "model": "qwen2.5:7b",
+    "models": ["qwen2.5:7b", "llama3:8b"]
+  },
+  "text_to_image": {
+    "available": true,
+    "model": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "models": [{"id": "...", "label": "...", "pipeline": "sd15", "default_size": 512}],
+    "pipeline": "sd15",
+    "default_params": {"width": 512, "height": 512, "num_inference_steps": 20, "guidance_scale": 7.5}
+  },
+  "three_d": {
+    "available": true,
+    "backend": "auto",
+    "available_backends": [
+      {"name": "zero123plus", "model": "sudo-ai/zero123plus-v1.2", "available": false, "reason": "需要 CUDA GPU"},
+      {"name": "stable-zero123", "model": "ds8nh/Stable-Zero123", "available": false, "reason": "需要 CUDA GPU"},
+      {"name": "sd-img2img", "model": "stable-diffusion-v1-5/stable-diffusion-v1-5", "available": true}
+    ],
+    "device": "cpu"
+  }
+}
+```
+
+---
+
+### POST `/api/generate-image`
+
+使用本地 Stable Diffusion / SDXL 生成图片
+
+**参数：**
+
+| 参数 | 类型 | 必填 | 说明 |
+| -------- | ------ | ------ | ------ |
+| `prompt` | string | 是 | 提示词 |
+| `model` | string | 否 | 模型 ID（运行时切换，见 `GET /api/models`） |
+| `width` / `height` | int | 否 | 分辨率（256-1024，8 的倍数，默认 512） |
+| `num_inference_steps` | int | 否 | 推理步数（1-60，默认 20） |
 
 ---
 

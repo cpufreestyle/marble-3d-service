@@ -5,7 +5,6 @@
 """
 
 import os
-import asyncio
 import time
 import logging
 import threading
@@ -120,8 +119,8 @@ class SmartEngineSelector:
             }
         }
 
-        # 定期更新引擎状态
-        self._status_update_task = None
+        # 初始状态检查 + 定期刷新（简单线程，无 asyncio 事件循环）
+        self._update_engine_status()
         self._start_periodic_status_check()
 
         logger.info("SmartEngineSelector 初始化完成")
@@ -144,44 +143,34 @@ class SmartEngineSelector:
     def _check_worldlabs_availability(self) -> Tuple[bool, Optional[str]]:
         """检查World Labs可用性"""
         try:
-            # 检查环境变量
             api_key = os.environ.get('WORLD_LABS_API_KEY')
             if not api_key:
                 return False, "缺少 WORLD_LABS_API_KEY 环境变量"
-
-            # 可以添加简单的连通性测试
-            # 为了简单起见，这里默认返回可用
             return True, None
-
         except Exception as e:
             return False, f"World Labs检查失败: {e}"
 
     def _check_stable3d_availability(self) -> Tuple[bool, Optional[str]]:
         """检查Stable Zero123可用性"""
         try:
-            # 检查GPU和内存要求
-            import torch
+            from utils.device import get_device, get_gpu_memory_gb
 
-            if torch.cuda.is_available():
-                # 检查GPU内存
-                gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                if gpu_memory < 4.0:
-                    return False, f"GPU内存不足: {gpu_memory:.1f}GB < 4.0GB"
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                # Apple Silicon
-                pass  # 假设可用
-            else:
-                # CPU模式 — 放宽内存要求，允许运行（仅记录警告）
+            device = get_device()
+            if device == 'cpu':
+                # CPU 模式始终可用（sd-img2img 后端兜底），仅检查内存
                 if psutil:
-                    system_memory = psutil.virtual_memory().available / (1024**3)
+                    system_memory = psutil.virtual_memory().available / (1024 ** 3)
                     if system_memory < 4.0:
                         logger.warning(
                             f"系统可用内存较低 ({system_memory:.1f}GB)，"
                             "Stable Zero123 在 CPU 模式下可能较慢"
                         )
-                # CPU 模式始终可用，只是速度较慢
                 return True, None
 
+            # GPU 模式：检查显存
+            gpu_memory = get_gpu_memory_gb()
+            if gpu_memory > 0 and gpu_memory < 4.0:
+                return False, f"GPU内存不足: {gpu_memory:.1f}GB < 4.0GB"
             return True, None
 
         except ImportError:
@@ -189,49 +178,39 @@ class SmartEngineSelector:
         except Exception as e:
             return False, f"Stable Zero123检查失败: {e}"
 
-    async def _update_engine_status(self):
-        """执行一次引擎状态更新（由 _start_periodic_status_check 定期调用）"""
+    def _update_engine_status(self):
+        """执行一次引擎状态更新（同步）"""
         try:
-            # 更新World Labs状态
             available, error = self._check_worldlabs_availability()
             self.engine_status[GenerationEngine.WORLD_LABS].available = available
             self.engine_status[GenerationEngine.WORLD_LABS].last_check_time = time.time()
             if error:
                 self.engine_status[GenerationEngine.WORLD_LABS].error_message = error
 
-            # 更新Stable Zero123状态
             available, error = self._check_stable3d_availability()
             self.engine_status[GenerationEngine.STABLE_3D].available = available
             self.engine_status[GenerationEngine.STABLE_3D].last_check_time = time.time()
             if error:
                 self.engine_status[GenerationEngine.STABLE_3D].error_message = error
 
-            logger.info(f"引擎状态更新: World Labs={self.engine_status[GenerationEngine.WORLD_LABS].available}, "
-                        f"Stable Zero123={self.engine_status[GenerationEngine.STABLE_3D].available}")
-
+            logger.info(
+                f"引擎状态更新: World Labs="
+                f"{self.engine_status[GenerationEngine.WORLD_LABS].available}, "
+                f"Stable Zero123="
+                f"{self.engine_status[GenerationEngine.STABLE_3D].available}"
+            )
         except Exception as e:
             logger.error(f"引擎状态更新失败: {e}")
 
     def _start_periodic_status_check(self):
-        """启动定期状态检查"""
-        async def status_check_loop():
+        """启动定期状态检查（简单线程，无 asyncio 事件循环）"""
+
+        def _check_loop():
             while True:
-                try:
-                    await asyncio.sleep(300)  # 每5分钟检查一次
-                    await self._update_engine_status()
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    logger.error(f"状态检查循环错误: {e}")
+                time.sleep(300)  # 每5分钟检查一次
+                self._update_engine_status()
 
-        # 在单独的线程中运行状态检查
-        def run_status_check():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(status_check_loop())
-
-        thread = threading.Thread(target=run_status_check, daemon=True)
-        thread.start()
+        threading.Thread(target=_check_loop, daemon=True).start()
 
     def _calculate_engine_score(self,
                                 engine: GenerationEngine,
@@ -251,18 +230,14 @@ class SmartEngineSelector:
 
         # 基于复杂度的评分调整
         if request.complexity == PromptComplexity.COMPLEX:
-            # 复杂任务偏向质量更好的引擎
             complexity_multiplier = capabilities.get("quality", 0.5)
         elif request.complexity == PromptComplexity.SIMPLE:
-            # 简单任务可以考虑速度
             complexity_multiplier = capabilities.get("speed", 0.5)
         else:
             complexity_multiplier = 0.75
 
-        # 资源效率评分
         resource_score = capabilities.get("resource_efficiency", 0.5)
 
-        # 综合评分
         total_score = (
             input_score * self.weights["quality"] +
             complexity_multiplier * self.weights["quality"] +
@@ -273,12 +248,12 @@ class SmartEngineSelector:
 
         return total_score
 
-    async def select_best_engine(self,
-                                 prompt: str,
-                                 has_image: bool = False,
-                                 user_preference: Optional[str] = None,
-                                 urgency_level: int = 1) -> SelectionResult:
-        """选择最佳生成引擎
+    def select_best_engine(self,
+                           prompt: str,
+                           has_image: bool = False,
+                           user_preference: Optional[str] = None,
+                           urgency_level: int = 1) -> SelectionResult:
+        """选择最佳生成引擎（同步）
 
         Args:
             prompt: 提示词
@@ -290,7 +265,6 @@ class SmartEngineSelector:
             选择结果
         """
         try:
-            # 创建请求对象
             request = GenerationRequest(
                 prompt=prompt,
                 has_image=has_image,
@@ -303,12 +277,16 @@ class SmartEngineSelector:
             if user_preference and user_preference != "auto":
                 try:
                     preferred_engine = GenerationEngine(user_preference)
-                    if self.engine_status.get(preferred_engine, EngineStatus("", False, 0)).available:
+                    if self.engine_status.get(
+                        preferred_engine, EngineStatus("", False, 0)
+                    ).available:
                         return SelectionResult(
                             selected_engine=preferred_engine,
                             confidence_score=0.8,
                             reasoning=f"使用用户偏好: {preferred_engine.value}",
-                            estimated_time=self._estimate_generation_time(preferred_engine, request)
+                            estimated_time=self._estimate_generation_time(
+                                preferred_engine, request
+                            )
                         )
                 except ValueError:
                     pass  # 无效的用户偏好，继续使用自动选择
@@ -321,27 +299,27 @@ class SmartEngineSelector:
                     engine_scores[engine] = score
 
             if not engine_scores:
-                # 没有可用引擎，返回降级方案
                 return SelectionResult(
-                    selected_engine=GenerationEngine.WORLD_LABS,  # 作为最后的尝试
+                    selected_engine=GenerationEngine.WORLD_LABS,
                     confidence_score=0.1,
                     reasoning="无可用引擎，尝试World Labs",
                     estimated_time=30.0,
                     fallback_plan=None
                 )
 
-            # 选择得分最高的引擎
             best_engine = max(engine_scores.keys(), key=lambda k: engine_scores[k])
             confidence = engine_scores[best_engine]
 
-            # 选择备用引擎
             fallback_engine = None
             if len(engine_scores) > 1:
-                fallback_engine = max((e for e in engine_scores.keys() if e != best_engine),
-                                      key=lambda k: engine_scores[k], default=None)
+                fallback_engine = max(
+                    (e for e in engine_scores if e != best_engine),
+                    key=lambda k: engine_scores[k], default=None
+                )
 
-            # 生成选择理由
-            reasoning = self._generate_selection_reasoning(best_engine, engine_scores, request)
+            reasoning = self._generate_selection_reasoning(
+                best_engine, engine_scores, request
+            )
 
             result = SelectionResult(
                 selected_engine=best_engine,
@@ -351,7 +329,6 @@ class SmartEngineSelector:
                 fallback_plan=fallback_engine
             )
 
-            # 记录选择历史
             self._record_selection(result, request)
 
             logger.info(f"引擎选择: {best_engine.value} (分数: {confidence:.3f})")
@@ -359,7 +336,6 @@ class SmartEngineSelector:
 
         except Exception as e:
             logger.error(f"引擎选择失败: {e}")
-            # 降级到World Labs
             return SelectionResult(
                 selected_engine=GenerationEngine.WORLD_LABS,
                 confidence_score=0.1,
@@ -376,20 +352,18 @@ class SmartEngineSelector:
 
         base_time = base_times.get(engine, 30.0)
 
-        # 根据复杂度调整
         if request.complexity == PromptComplexity.COMPLEX:
             base_time *= 1.5
         elif request.complexity == PromptComplexity.MODERATE:
             base_time *= 1.2
 
-        # 根据是否包含图片调整
         if request.has_image:
             if engine == GenerationEngine.STABLE_3D:
-                base_time *= 0.8  # Stable Zero123对图片更友好
+                base_time *= 0.8
             else:
                 base_time *= 1.1
 
-        return max(base_time, 5.0)  # 至少5秒
+        return max(base_time, 5.0)
 
     def _generate_selection_reasoning(self,
                                       best_engine: GenerationEngine,
@@ -427,7 +401,6 @@ class SmartEngineSelector:
             'confidence': result.confidence_score
         })
 
-        # 保持历史记录大小
         if len(self.selection_history) > self.max_history_size:
             self.selection_history = self.selection_history[-self.max_history_size:]
 
