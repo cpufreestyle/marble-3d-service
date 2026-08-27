@@ -4,24 +4,22 @@ services:
   # Marble 3D Service 后端
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: backend/Dockerfile
     ports:
       - "5000:5000"
     env_file:
       - .env
     environment:
-      - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
     volumes:
       - ./uploads:/app/uploads
-      - ./generated_3d_views:/app/generated_3d_views
-      - ./logs:/app/logs
+      - ./generated_3d_views:/app/backend/generated_3d_views
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
-      timeout: 3s
+      timeout: 5s
       retries: 3
       start_period: 5s
 
@@ -31,7 +29,7 @@ services:
   #   ports:
   #     - "8080:80"
   #   volumes:
-  #     - ./frontend:/usr/share/nginx/html:ro
+  #     - ../frontend:/usr/share/nginx/html:ro
   #   depends_on:
   #     - backend
   #   restart: unless-stopped

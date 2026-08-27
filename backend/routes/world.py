@@ -30,10 +30,13 @@ load_dotenv()
 
 world_bp = Blueprint('world', __name__)
 
+# 日志（配置由 app.py 统一完成）
+logger = logging.getLogger(__name__)
+
 # World Labs API 配置
 API_KEY = os.environ.get('WORLD_LABS_API_KEY')
 if not API_KEY:
-    logging.warning(
+    logger.warning(
         "⚠️ 缺少 WORLD_LABS_API_KEY 环境变量。"
         "World Labs 引擎将不可用，请在 .env 文件中设置。"
     )
@@ -54,12 +57,6 @@ text_to_image_generator = TextToImageGenerator()
 
 # 通用本地 LLM 客户端（LM Studio / vLLM / llama.cpp / Ollama / 任意 OpenAI 兼容端点）
 llm_client = LocalLLMClient()
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
-)
 
 # 创建事件循环线程（用于处理异步操作）
 asyncio_loop = None
@@ -90,9 +87,9 @@ def cleanup_old_uploads(max_age_hours=1):
                     filepath.unlink()
                     cleaned += 1
     except Exception as e:
-        logging.debug(f"清理上传文件时出错: {e}")
+        logger.debug(f"清理上传文件时出错: {e}")
     if cleaned:
-        logging.info(f"已清理 {cleaned} 个过期上传文件")
+        logger.info(f"已清理 {cleaned} 个过期上传文件")
 
 
 def _cleanup_daemon(interval_seconds=3600):
@@ -163,7 +160,7 @@ def save_uploaded_image(image_file):
     filename = f"{uuid.uuid4().hex}{ext}"
     filepath = os.path.join(UPLOAD_DIR, filename)
     image_file.save(filepath)
-    image_url = f"{request.host_url}uploads/{filename}"
+    image_url = f"/uploads/{filename}"
     return filepath, image_url
 
 
@@ -218,7 +215,7 @@ def _enhance_prompt(prompt, use_local_llm, llm_model=None):
         prompt, model_override=llm_model or None
     )
     if enhanced:
-        logging.info(f"使用 {llm_used} 优化提示词: {prompt} -> {enhanced}")
+        logger.info(f"使用 {llm_used} 优化提示词: {prompt} -> {enhanced}")
         return enhanced, llm_used
 
     return prompt, None
@@ -238,14 +235,14 @@ def _select_engine(final_prompt, has_image, engine_preference):
         )
 
         selected_engine = selection_result.selected_engine
-        logging.info(
+        logger.info(
             f"智能引擎选择: {selected_engine.value} - "
             f"{selection_result.reasoning}"
         )
         return selected_engine
 
     except Exception as e:
-        logging.warning(f"智能选择失败，使用默认引擎: {e}")
+        logger.warning(f"智能选择失败，使用默认引擎: {e}")
         return GenerationEngine.STABLE_3D
 
 
@@ -257,7 +254,7 @@ def _handle_stable_3d(image_to_process, final_prompt, backend=None):
     返回 dict: {success, data, status_code} 或 None 表示降级到 World Labs
     """
     if image_to_process is None:
-        logging.warning("Stable Zero123 需要图片输入，但未传入")
+        logger.warning("Stable Zero123 需要图片输入，但未传入")
         return None
 
     try:
@@ -284,14 +281,14 @@ def _handle_stable_3d(image_to_process, final_prompt, backend=None):
                 'status_code': 200
             }
         else:
-            logging.warning(
+            logger.warning(
                 f"Stable Zero123失败，降级到World Labs: "
                 f"{stable_result.get('error')}"
             )
             return None  # 降级
 
     except Exception as e:
-        logging.error(f"Stable Zero123处理失败: {e}")
+        logger.error(f"Stable Zero123处理失败: {e}")
         return None  # 降级
 
 
@@ -322,7 +319,7 @@ def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
         "world_prompt": world_prompt
     }
 
-    logging.info(f"创建 3D 世界 (World Labs): prompt={final_prompt[:100]}...")
+    logger.info(f"创建 3D 世界 (World Labs): prompt={final_prompt[:100]}...")
     response = requests.post(
         f'{API_URL}/worlds:generate',
         headers=headers,
@@ -332,7 +329,7 @@ def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
 
     if response.status_code in [200, 201]:
         result = response.json()
-        logging.info(f"任务创建成功: task_id={result.get('operation_id')}")
+        logger.info(f"任务创建成功: task_id={result.get('operation_id')}")
         return jsonify({
             'success': True,
             'engine_used': 'world-labs',
@@ -344,7 +341,7 @@ def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
             'image_url': image_url
         }), 200
     else:
-        logging.error(
+        logger.error(
             f"API 错误: {response.status_code} - {response.text[:200]}"
         )
         return jsonify({
@@ -379,7 +376,7 @@ def get_llm_status():
             )
         })
     except Exception as e:
-        logging.error(f"检查 LLM 状态失败: {e}")
+        logger.error(f"检查 LLM 状态失败: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -418,7 +415,7 @@ def list_models():
             },
         })
     except Exception as e:
-        logging.error(f"获取模型列表失败: {e}")
+        logger.error(f"获取模型列表失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -435,15 +432,12 @@ def upload_image():
         if not is_valid:
             return jsonify({'success': False, 'error': error_msg}), 400
 
-        # 验证通过后重新 seek 并保存
-        ext = os.path.splitext(image_file.filename)[1].lower()
-        filename = f"{uuid.uuid4().hex}{ext}"
-        filepath = os.path.join(UPLOAD_DIR, filename)
+        # 复用通用保存函数
         image_file.stream.seek(0)
-        image_file.save(filepath)
+        filepath, image_url = save_uploaded_image(image_file)
+        filename = os.path.basename(filepath)
 
-        image_url = f"/uploads/{filename}"
-        logging.info(f"图片上传成功: {filename}")
+        logger.info(f"图片上传成功: {filename}")
         return jsonify({
             'success': True,
             'url': image_url,
@@ -451,7 +445,7 @@ def upload_image():
         })
 
     except Exception as e:
-        logging.error(f"图片上传失败: {e}")
+        logger.error(f"图片上传失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -520,7 +514,7 @@ def generate_image():
         if validation_err:
             return jsonify({'success': False, 'error': validation_err}), 400
 
-        logging.info(
+        logger.info(
             f"文生图请求: {params['prompt'][:100]} "
             f"(model={params['model']}, {params['width']}x{params['height']}, "
             f"steps={params['num_inference_steps']})"
@@ -540,7 +534,7 @@ def generate_image():
             return jsonify(result), 500
 
     except Exception as e:
-        logging.error(f"文生图失败: {e}")
+        logger.error(f"文生图失败: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -630,7 +624,7 @@ def create_world():
         )
 
     except Exception as e:
-        logging.error(f"创建世界失败: {e}")
+        logger.error(f"创建世界失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -652,7 +646,7 @@ def engine_status():
         })
 
     except Exception as e:
-        logging.error(f"获取引擎状态失败: {e}")
+        logger.error(f"获取引擎状态失败: {e}")
         return jsonify({
             'success': False,
             'error': f'获取引擎状态失败: {e}'
@@ -686,7 +680,7 @@ def test_stable_3d():
         })
 
     except Exception as e:
-        logging.error(f"Stable Zero123测试失败: {e}")
+        logger.error(f"Stable Zero123测试失败: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -701,7 +695,7 @@ def get_task_status(task_id):
 
         headers = {'WLT-Api-Key': api_key}
 
-        logging.info(f"查询任务状态: task_id={task_id}")
+        logger.info(f"查询任务状态: task_id={task_id}")
         response = requests.get(
             f'{API_URL}/operations/{task_id}',
             headers=headers,
@@ -722,7 +716,7 @@ def get_task_status(task_id):
                 thumb = assets.get('thumbnail_url', '')
                 pano = imagery.get('pano_url', '')
 
-                logging.info(f"任务完成: task_id={task_id}")
+                logger.info(f"任务完成: task_id={task_id}")
                 return jsonify({
                     'success': True,
                     'status': 'completed',
@@ -746,7 +740,7 @@ def get_task_status(task_id):
                     'progress': '生成中...'
                 })
         else:
-            logging.error(
+            logger.error(
                 f"获取状态失败: {response.status_code} - {response.text[:200]}"
             )
             return jsonify({
@@ -755,5 +749,5 @@ def get_task_status(task_id):
             }), response.status_code
 
     except Exception as e:
-        logging.error(f"查询任务状态失败: {e}")
+        logger.error(f"查询任务状态失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500

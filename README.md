@@ -213,9 +213,9 @@ docker-compose up -d
 ### 手动构建 Docker 镜像
 
 ```bash
-cd backend
-docker build -t marble-3d-service .
-docker run -p 5000:5000 --env-file .env marble-3d-service
+# 构建上下文为项目根目录（需包含 frontend/ 和 docs/）
+docker build -t marble-3d-service -f backend/Dockerfile .
+docker run -p 5000:5000 --env-file backend/.env marble-3d-service
 ```
 
 ---

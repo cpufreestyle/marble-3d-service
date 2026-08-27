@@ -53,11 +53,6 @@ def _get_numpy():
     return _np
 
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # 后端规格定义：auto 模式按列表顺序（优先级）尝试

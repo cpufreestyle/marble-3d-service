@@ -25,10 +25,6 @@ def _get_torch():
     return _torch
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # 预置的本地模型选项（可通过 TEXT_TO_IMAGE_MODEL 使用任意 HuggingFace ID 或本地路径）

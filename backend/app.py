@@ -4,6 +4,7 @@ Marble 3D 世界生成服务 - 后端 API
 """
 
 import os
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,12 @@ from dotenv import load_dotenv
 
 # 加载环境变量（从 .env 文件）— 必须在 routes.world 导入前执行
 load_dotenv()
+
+# 统一日志配置（单点调用，各模块用 getLogger(__name__) 即可）
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+)
 
 from extensions import limiter  # noqa: E402
 from routes.world import world_bp  # noqa: E402

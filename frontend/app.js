@@ -131,8 +131,7 @@ async function checkLlmStatus() {
 }
 
 function toggleLlm() {
-    const useLlm = document.getElementById('useLlmToggle').checked;
-    console.log('Local LLM toggle:', useLlm);
+    // 状态由 checkbox 的 checked 属性直接读取，无需额外处理
 }
 
 function saveApiKey() {
