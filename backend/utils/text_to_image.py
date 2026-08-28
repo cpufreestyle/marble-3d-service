@@ -58,9 +58,9 @@ class TextToImageGenerator:
     """
 
     def __init__(self, model_id: str = "stable-diffusion-v1-5/stable-diffusion-v1-5"):
-        # 设置 HuggingFace 镜像（解决国内网络问题）
+        # HuggingFace 端点：默认直连 huggingface.co，可通过 HF_ENDPOINT 切换镜像
         if not os.environ.get('HF_ENDPOINT'):
-            os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+            os.environ['HF_ENDPOINT'] = 'https://huggingface.co'
         # 设置缓存目录到 D 盘（避免 C 盘空间不足）
         if not os.environ.get('HF_HOME'):
             os.environ['HF_HOME'] = 'D:\\hf_cache'

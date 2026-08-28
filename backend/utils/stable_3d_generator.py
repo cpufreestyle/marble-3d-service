@@ -84,9 +84,9 @@ class Stable3DGenerator:
     """Stable Zero123 系多后端 3D 生成器"""
 
     def __init__(self, backend: str = None):
-        # 设置 HuggingFace 镜像（解决国内网络问题）
+        # HuggingFace 端点：默认直连 huggingface.co，可通过 HF_ENDPOINT 切换镜像
         if not os.environ.get('HF_ENDPOINT'):
-            os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+            os.environ['HF_ENDPOINT'] = 'https://huggingface.co'
         # 设置缓存目录到 D 盘（避免 C 盘空间不足）
         if not os.environ.get('HF_HOME'):
             os.environ['HF_HOME'] = 'D:\\hf_cache'
