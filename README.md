@@ -554,6 +554,24 @@ flake8 backend/
 
 ---
 
+## 🌍 World API 与 Atlas
+
+本项目基于 World Labs 的 **World API**（Marble 公开 API，`docs.worldlabs.ai`）：
+
+- **多模态输入**：文字 / 单图 / 多图（可带方位角）/ 360° 全景（`is_pano`）/ 视频
+- **本地图片上传**：官方 media asset 三步流程（prepare_upload → 签名 URL PUT → `media_asset_id` 引用），本地部署无需公网可达
+- **模型选择**：`marble-1.0-draft`（快速低成本）/ `marble-1.0` / `marble-1.1`（默认，支持全景）/ `marble-1.1-plus`（动态世界尺寸），可通过 `WORLD_LABS_MODEL` 或前端下拉框选择
+- **资产导出**：生成完成后可导出 Gaussian splats（SPZ 直接下载，PLY 经 `:export` 端点转换）
+- **Credits 查询**：`GET /api/credits`（需 World Labs Platform 的 API credits，与 Marble 应用订阅相互独立）
+
+### 关于 Atlas
+
+World Labs 于 2026-09 发布了新一代全模世界模型 **Atlas**（单图 + 相机路径 → 1440p/1min 可控视频、稀疏图 3D 重建、点云/Gaussian splats 输出），**目前仅对早期合作伙伴开放，无公开 API**。
+
+本项目已预留 Atlas 引擎位（见 `/api/models` 的 `atlas` 字段），待 World Labs 公开 Atlas API 后接入。如需优先体验，可到 [worldlabs.ai](https://www.worldlabs.ai) 申请早期访问。
+
+---
+
 ## 📄 许可证
 
 本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情

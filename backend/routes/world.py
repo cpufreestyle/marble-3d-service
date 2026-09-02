@@ -43,6 +43,19 @@ if not API_KEY:
 
 API_URL = 'https://api.worldlabs.ai/marble/v1'
 
+# World Labs Marble 模型（World API 规范）
+WORLD_LABS_MODELS = [
+    'marble-1.0-draft',   # 快速/低成本草稿
+    'marble-1.0',
+    'marble-1.1',         # 默认，支持全景输入
+    'marble-1.1-plus',    # 动态世界尺寸
+]
+WORLD_LABS_MODEL = os.environ.get('WORLD_LABS_MODEL', 'marble-1.1')
+
+# Atlas（World Labs 新一代全模世界模型）：暂无公开 API，仅早期合作伙伴。
+# 引擎位已预留，待 World Labs 公开 Atlas API 后在此接入。
+ATLAS_ENGINE_RESERVED = True
+
 # 上传目录（与 app.py 一致：项目根目录/uploads/）
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'uploads')
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
@@ -179,6 +192,9 @@ def _parse_create_request():
         'image_url': None,
         'llm_model': '',
         'three_d_backend': '',
+        'world_model': '',
+        'is_pano': '',
+        'seed': None,
     }
 
     if request.content_type and 'multipart/form-data' in request.content_type:
@@ -191,6 +207,11 @@ def _parse_create_request():
         result['image_url'] = request.form.get('image_url')
         result['llm_model'] = request.form.get('llm_model', '').strip()
         result['three_d_backend'] = request.form.get('three_d_backend', '').strip()
+        result['world_model'] = request.form.get('world_model', '').strip()
+        result['is_pano'] = request.form.get('is_pano', '').strip().lower()
+        raw_seed = request.form.get('seed', '').strip()
+        if raw_seed.isdigit():
+            result['seed'] = int(raw_seed)
     elif request.is_json:
         data = request.get_json(silent=True) or {}
         result['prompt'] = data.get('prompt', '')
@@ -199,6 +220,11 @@ def _parse_create_request():
         result['image_url'] = data.get('image_url')
         result['llm_model'] = (data.get('llm_model') or '').strip()
         result['three_d_backend'] = (data.get('three_d_backend') or '').strip()
+        result['world_model'] = (data.get('world_model') or '').strip()
+        result['is_pano'] = str(data.get('is_pano') or '').strip().lower()
+        seed = data.get('seed')
+        if isinstance(seed, int) and 0 <= seed <= 4294967295:
+            result['seed'] = seed
 
     return result
 
@@ -292,9 +318,55 @@ def _handle_stable_3d(image_to_process, final_prompt, backend=None):
         return None  # 降级
 
 
-def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
+def _upload_media_asset(file_path, api_key):
+    """将本地图片上传为 World Labs Media Asset（官方三步流程）。
+
+    1. POST /media-assets:prepare_upload 获取 media_asset_id + 签名上传 URL
+    2. PUT 文件字节到签名 URL（带 required_headers）
+    3. 返回 media_asset_id 供 worlds:generate 引用
+
+    本地服务的 /uploads/ 图片无公网 URL，必须走此流程。
     """
-    处理 World Labs 引擎的 3D 生成。
+    headers = {'WLT-Api-Key': api_key, 'Content-Type': 'application/json'}
+    file_name = os.path.basename(file_path)
+    extension = os.path.splitext(file_name)[1].lstrip('.').lower() or 'png'
+
+    resp = requests.post(
+        f'{API_URL}/media-assets:prepare_upload',
+        headers=headers,
+        json={'file_name': file_name, 'extension': extension, 'kind': 'image'},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f'Media Asset 准备失败: HTTP {resp.status_code} - {resp.text[:300]}'
+        )
+
+    data = resp.json()
+    media_asset_id = data['media_asset']['media_asset_id']
+    upload_info = data['upload_info']
+    upload_url = upload_info['upload_url']
+    required_headers = upload_info.get('required_headers') or {}
+
+    with open(file_path, 'rb') as f:
+        file_bytes = f.read()
+    upload_resp = requests.put(
+        upload_url, data=file_bytes, headers=required_headers, timeout=120
+    )
+    if upload_resp.status_code not in (200, 201):
+        raise RuntimeError(
+            f'Media Asset 上传失败: HTTP {upload_resp.status_code}'
+        )
+
+    logger.info(f"Media Asset 上传成功: {media_asset_id}")
+    return media_asset_id
+
+
+def _handle_world_labs(final_prompt, prompt, llm_used, image_url,
+                       api_key, saved_filepath=None, world_model=None,
+                       is_pano=None, seed=None):
+    """
+    处理 World Labs 引擎的 3D 生成（World API 规范格式）。
     返回 (response_json, status_code)
     """
     headers = {
@@ -304,22 +376,59 @@ def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
 
     # 构建 world_prompt：优先图片，否则文本
     if image_url:
+        image_prompt = {}
+        if image_url.startswith(('http://', 'https://')):
+            # 公网 URL 直接引用
+            image_prompt = {'source': 'uri', 'uri': image_url}
+        else:
+            # 本地 /uploads/ 图片 → media asset 三步上传
+            local_path = saved_filepath
+            if not local_path:
+                filename = os.path.basename(image_url)
+                local_path = os.path.join(UPLOAD_DIR, filename)
+            if not os.path.exists(local_path):
+                return jsonify({
+                    'success': False,
+                    'error': f'本地图片不存在: {local_path}'
+                }), 400
+            try:
+                media_asset_id = _upload_media_asset(local_path, api_key)
+            except RuntimeError as e:
+                logger.error(f"Media Asset 上传失败: {e}")
+                return jsonify({
+                    'success': False, 'error': str(e)
+                }), 502
+            image_prompt = {
+                'source': 'media_asset',
+                'media_asset_id': media_asset_id,
+            }
+
         world_prompt = {
-            "type": "image_url",
-            "image_url": {"url": image_url}
+            'type': 'image',
+            'image_prompt': image_prompt,
         }
+        if final_prompt and final_prompt != prompt:
+            world_prompt['text_prompt'] = final_prompt
+        if is_pano in ('auto', 'true', 'false'):
+            world_prompt['is_pano'] = is_pano
     else:
         world_prompt = {
             "type": "text",
             "text_prompt": final_prompt
         }
 
+    model = world_model if world_model in WORLD_LABS_MODELS else WORLD_LABS_MODEL
     payload = {
-        "display_name": (final_prompt or "Image World")[:50] or "My World",
-        "world_prompt": world_prompt
+        "display_name": (final_prompt or "Image World")[:64] or "My World",
+        "model": model,
+        "world_prompt": world_prompt,
     }
+    if seed is not None:
+        payload['seed'] = seed
 
-    logger.info(f"创建 3D 世界 (World Labs): prompt={final_prompt[:100]}...")
+    logger.info(
+        f"创建 3D 世界 (World Labs/{model}): prompt={final_prompt[:100]}..."
+    )
     response = requests.post(
         f'{API_URL}/worlds:generate',
         headers=headers,
@@ -332,7 +441,7 @@ def _handle_world_labs(final_prompt, prompt, llm_used, image_url, api_key):
         logger.info(f"任务创建成功: task_id={result.get('operation_id')}")
         return jsonify({
             'success': True,
-            'engine_used': 'world-labs',
+            'engine_used': f'world-labs ({model})',
             'task_id': result.get('operation_id'),
             'status': 'processing',
             'original_prompt': prompt,
@@ -412,6 +521,27 @@ def list_models():
                 or stable_3d_info.get('configured_backend'),
                 'available_backends': stable_3d_info.get('available_backends', []),
                 'device': stable_3d_info.get('device'),
+            },
+            'worldlabs': {
+                'available': bool(API_KEY),
+                'model': WORLD_LABS_MODEL,
+                'models': WORLD_LABS_MODELS,
+                'features': [
+                    'text', 'image', 'pano', 'multi-image', 'video',
+                    'seed', 'tags', 'media_asset_upload', 'ply_export',
+                ],
+            },
+            'atlas': {
+                'available': False,
+                'reserved': ATLAS_ENGINE_RESERVED,
+                'note': 'Atlas（World Labs 全模世界模型）暂无公开 API，'
+                        '仅限早期合作伙伴。引擎位已预留，待公开后接入。'
+                        '可到 worldlabs.ai 申请早期访问。',
+                'capabilities': [
+                    'camera-controlled 1440p video (up to 1min)',
+                    'sparse-image 3D reconstruction',
+                    'point clouds / Gaussian splats',
+                ],
             },
         })
     except Exception as e:
@@ -620,7 +750,11 @@ def create_world():
             }), 401
 
         return _handle_world_labs(
-            final_prompt, prompt, llm_used, image_url, api_key
+            final_prompt, prompt, llm_used, image_url, api_key,
+            saved_filepath=saved_filepath,
+            world_model=params['world_model'] or None,
+            is_pano=params['is_pano'] or None,
+            seed=params['seed'],
         )
 
     except Exception as e:
@@ -651,6 +785,110 @@ def engine_status():
             'success': False,
             'error': f'获取引擎状态失败: {e}'
         }), 500
+
+
+@world_bp.route('/credits')
+def get_credits():
+    """查询 World Labs API 剩余 credits"""
+    try:
+        api_key = get_api_key_from_request() or API_KEY
+        if not api_key:
+            return jsonify({
+                'success': False, 'error': '缺少 World Labs API Key'
+            }), 401
+
+        response = requests.get(
+            f'{API_URL}/credits',
+            headers={'WLT-Api-Key': api_key},
+            timeout=30
+        )
+        if response.status_code != 200:
+            return jsonify({
+                'success': False,
+                'error': f'查询失败: HTTP {response.status_code}'
+            }), response.status_code
+
+        remaining = response.json().get('remaining_credits')
+        return jsonify({
+            'success': True,
+            'remaining_credits': remaining,
+        })
+    except Exception as e:
+        logger.error(f"查询 credits 失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@world_bp.route('/export-world/<world_id>', methods=['POST'])
+@limiter.limit("5 per minute")
+def export_world(world_id):
+    """导出世界资产：splats → PLY / mesh → GLB（World Labs :export 端点）"""
+    try:
+        api_key = get_api_key_from_request() or API_KEY
+        if not api_key:
+            return jsonify({
+                'success': False, 'error': '缺少 World Labs API Key'
+            }), 401
+
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+        else:
+            data = request.form or {}
+
+        asset_type = (data.get('asset_type') or 'splats').strip()
+        if asset_type not in ('splats', 'mesh'):
+            return jsonify({
+                'success': False, 'error': "asset_type 必须是 'splats' 或 'mesh'"
+            }), 400
+
+        payload = {'asset_type': asset_type}
+        if asset_type == 'splats':
+            fmt = (data.get('format') or 'ply').strip()
+            if fmt != 'ply':
+                return jsonify({
+                    'success': False, 'error': "splats 导出仅支持 ply 格式"
+                }), 400
+            payload['format'] = 'ply'
+            payload['resolution'] = (data.get('resolution') or 'full_res').strip()
+        else:
+            payload['format'] = 'glb'
+
+        logger.info(
+            f"导出世界资产: world={world_id}, {payload['asset_type']}"
+        )
+        response = requests.post(
+            f'{API_URL}/worlds/{world_id}:export',
+            headers={
+                'WLT-Api-Key': api_key,
+                'Content-Type': 'application/json',
+            },
+            json=payload,
+            timeout=60,
+        )
+        if response.status_code != 200:
+            return jsonify({
+                'success': False,
+                'error': f'导出失败: HTTP {response.status_code}',
+                'details': response.text[:500],
+            }), response.status_code
+
+        result = response.json()
+        done = result.get('done', False)
+        export_resp = result.get('response') or {}
+        download_url = export_resp.get('url', '')
+
+        return jsonify({
+            'success': True,
+            'done': done,
+            'operation_id': result.get('operation_id'),
+            'download_url': download_url,
+            'message': (
+                '导出完成' if done and download_url
+                else '导出处理中，请稍后用 operation_id 查询'
+            ),
+        })
+    except Exception as e:
+        logger.error(f"导出世界资产失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @world_bp.route('/test-stable-3d', methods=['POST'])
@@ -721,7 +959,7 @@ def get_task_status(task_id):
                     'success': True,
                     'status': 'completed',
                     'result': {
-                        'world_id': world_data.get('id', ''),
+                        'world_id': world_data.get('world_id', ''),
                         'world_url': world_data.get('world_marble_url', ''),
                         'preview_url': thumb or pano,
                         'pano_url': pano,

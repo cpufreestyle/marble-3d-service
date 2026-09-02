@@ -56,6 +56,13 @@
                         <option value="stable-zero123">🧊 Stable Zero123（需 GPU）</option>
                         <option value="sd-img2img">🎨 SD img2img（CPU 可用）</option>
                     </select>
+                    <select id="worldModelSelect" class="engine-select" style="margin-top:8px;" aria-label="选择 Marble 模型（World Labs 引擎）">
+                        <option value="">🌍 Marble 模型：跟随服务端默认</option>
+                        <option value="marble-1.1">Marble 1.1（默认，支持全景）</option>
+                        <option value="marble-1.0">Marble 1.0</option>
+                        <option value="marble-1.0-draft">Marble 1.0 Draft（快速/低成本）</option>
+                        <option value="marble-1.1-plus">Marble 1.1 Plus（动态世界尺寸）</option>
+                    </select>
                 </div>
 
                 <!-- API Key 设置 -->
@@ -127,6 +134,12 @@
                         <label for="imagePrompt">补充描述（可选）</label>
                         <textarea id="imagePrompt" placeholder="描述你想要的世界，如：添加下雨效果，更温暖的色调..." aria-label="补充描述输入"></textarea>
                     </div>
+
+                    <!-- 全景图标记（World Labs 引擎） -->
+                    <label style="display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#aaa;cursor:pointer;">
+                        <input type="checkbox" id="isPanoToggle" style="width:16px;height:16px;cursor:pointer;">
+                        🌐 这是 360° 全景图（equirectangular）
+                    </label>
                 </div>
 
                 <button class="btn" id="generateBtn" onclick="generateWorld()" aria-label="开始生成 3D 世界">

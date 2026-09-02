@@ -3,6 +3,7 @@
 const API_BASE = window.location.origin + '/api';
 let currentTaskId = null;
 let currentWorldUrl = null;
+let currentWorldId = null;
 let pollTimeout = null;
 let pollCount = 0;
 let userApiKey = '';
@@ -329,6 +330,7 @@ function showResult(data) {
 
     // ===== World Labs 结果处理 =====
     currentWorldUrl = data.world_url || data.pano_url;
+    currentWorldId = data.world_id || null;
     var previewUrl = data.preview_url || data.thumbnail_url || data.pano_url;
 
     var thumbnailHtml = '';
@@ -346,6 +348,9 @@ function showResult(data) {
     }
     if (data.pano_url) {
         actionButtons += '<button class="btn btn-secondary" onclick="window.open(\'' + escapeAttr(data.pano_url) + '\', \'_blank\')">🖼️ 全景图</button>';
+    }
+    if (currentWorldId) {
+        actionButtons += '<button class="btn btn-secondary" onclick="exportWorld(\'' + escapeAttr(currentWorldId) + '\')">📦 导出 PLY 点云</button>';
     }
     actionButtons += '<button class="btn btn-secondary" onclick="copyLink()">📋 复制链接</button>';
 
@@ -523,6 +528,37 @@ function copyLink() {
     }
 }
 
+// ===== 导出世界资产（PLY 点云 / GLB 网格） =====
+async function exportWorld(worldId) {
+    showToast('📦 正在请求导出...');
+    try {
+        var response = await fetch(API_BASE + '/export-world/' + encodeURIComponent(worldId), {
+            method: 'POST',
+            headers: Object.assign(
+                { 'Content-Type': 'application/json' }, getAuthHeaders()
+            ),
+            body: JSON.stringify({ asset_type: 'splats', format: 'ply' })
+        });
+        if (!response.ok) {
+            var errData = null;
+            try { errData = await response.json(); } catch (e) { /* ignore */ }
+            throw new Error((errData && errData.error) || 'HTTP ' + response.status);
+        }
+        var data = await response.json();
+        if (data.success && data.download_url) {
+            window.open(data.download_url, '_blank');
+            showToast('📦 PLY 导出完成，已开始下载');
+        } else if (data.success) {
+            showToast('⏳ 导出处理中，请稍后重试');
+        } else {
+            throw new Error(data.error || '导出失败');
+        }
+    } catch (error) {
+        console.error('Export failed:', error);
+        showToast('⚠️ 导出失败: ' + error.message, true);
+    }
+}
+
 // ===== AI 生成图片 =====
 async function generateImageFromText() {
     var prompt = document.getElementById('prompt').value.trim();
@@ -652,6 +688,16 @@ async function generateWorld() {
         }
         if (backendSel && backendSel.value) {
             formData.append('three_d_backend', backendSel.value);
+        }
+
+        // World Labs Marble 模型与全景标记
+        var worldModelSel = document.getElementById('worldModelSelect');
+        if (worldModelSel && worldModelSel.value) {
+            formData.append('world_model', worldModelSel.value);
+        }
+        var isPanoToggle = document.getElementById('isPanoToggle');
+        if (isPanoToggle && isPanoToggle.checked) {
+            formData.append('is_pano', 'true');
         }
 
         if (mode === 'image' && uploadedImageFile) {

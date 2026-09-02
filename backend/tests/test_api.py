@@ -12,6 +12,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app import app  # noqa: E402
+from extensions import limiter  # noqa: E402
 
 
 # 模拟 World Labs API 的 HTTP 响应（避免真实网络请求与超时）
@@ -28,6 +29,8 @@ class TestAPI(unittest.TestCase):
         """设置测试客户端"""
         self.app = app.test_client()
         self.app.testing = True
+        # 测试中禁用速率限制（套件内多次调用 /api/create 会触发 5/min 限制）
+        limiter.enabled = False
 
     # 所有触发 /api/create 或 /api/task 的测试都 mock 掉外部 HTTP
     # 与 LLM 探测，避免真实网络请求导致的超时
@@ -264,6 +267,7 @@ class TestSecurity(unittest.TestCase):
     def setUp(self):
         self.app = app.test_client()
         self.app.testing = True
+        limiter.enabled = False
 
     @patch('routes.world.requests.get', return_value=_MOCK_RESPONSE)
     @patch('routes.world.requests.post', return_value=_MOCK_RESPONSE)
@@ -295,6 +299,162 @@ class TestSecurity(unittest.TestCase):
         data = response.get_json()
         if data and not data.get('success'):
             self.assertNotIn('缺少', data.get('error', ''))
+
+
+class TestWorldAPIUpgrade(unittest.TestCase):
+    """World API 规范升级与 Atlas 预留相关测试"""
+
+    def setUp(self):
+        self.app = app.test_client()
+        self.app.testing = True
+        limiter.enabled = False
+
+    def test_models_include_worldlabs_and_atlas(self):
+        """/api/models 应包含 worldlabs 与 atlas 引擎信息"""
+        response = self.app.get('/api/models')
+        self.assertEqual(response.status_code, 200)
+
+        data = response.get_json()
+        self.assertIn('worldlabs', data)
+        self.assertIn('atlas', data)
+        # worldlabs：模型列表
+        wl = data['worldlabs']
+        self.assertIn('marble-1.1', wl['models'])
+        self.assertIn('marble-1.0-draft', wl['models'])
+        # atlas：预留占位，当前不可用
+        atlas = data['atlas']
+        self.assertFalse(atlas['available'])
+        self.assertTrue(atlas['reserved'])
+
+    def test_credits_without_key(self):
+        """无 API Key 时 /api/credits 返回 401"""
+        response = self.app.get('/api/credits')
+        self.assertEqual(response.status_code, 401)
+
+    @patch('routes.world.requests.get')
+    def test_credits_with_key(self, mock_get):
+        """/api/credits 正常返回剩余 credits"""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {'remaining_credits': 42.5}
+        mock_get.return_value = mock_resp
+
+        response = self.app.get(
+            '/api/credits', headers={'X-API-Key': 'test-key'}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['success'])
+        self.assertEqual(data['remaining_credits'], 42.5)
+
+    def test_export_world_invalid_asset_type(self):
+        """非法 asset_type 返回 400"""
+        response = self.app.post(
+            '/api/export-world/test-world-id',
+            json={'asset_type': 'bogus'},
+            content_type='application/json',
+            headers={'X-API-Key': 'test-key'}
+        )
+        self.assertEqual(response.status_code, 400)
+
+    @patch('routes.world.requests.post')
+    def test_export_world_payload(self, mock_post):
+        """导出请求应使用规范 payload（splats/ply/full_res）"""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            'done': True,
+            'operation_id': 'op-1',
+            'response': {'url': 'https://example.com/world.ply'},
+        }
+        mock_post.return_value = mock_resp
+
+        response = self.app.post(
+            '/api/export-world/test-world-id',
+            json={'asset_type': 'splats', 'format': 'ply'},
+            content_type='application/json',
+            headers={'X-API-Key': 'test-key'}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['success'])
+        self.assertTrue(data['done'])
+        self.assertEqual(data['download_url'], 'https://example.com/world.ply')
+
+        # 校验发到 World Labs 的 payload
+        called_url = mock_post.call_args[0][0]
+        self.assertIn('/worlds/test-world-id:export', called_url)
+        sent_payload = mock_post.call_args[1]['json']
+        self.assertEqual(sent_payload['asset_type'], 'splats')
+        self.assertEqual(sent_payload['format'], 'ply')
+        self.assertEqual(sent_payload['resolution'], 'full_res')
+
+    @patch('routes.world.requests.post')
+    @patch('routes.world.llm_client.detect')
+    def test_create_world_image_uri_format(self, mock_detect, mock_post):
+        """公网图片 URL 应使用规范 image_prompt{source: uri} 格式"""
+        mock_detect.return_value = {'available': False}
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            'operation_id': 'op-abc',
+        }
+        mock_post.return_value = mock_resp
+
+        response = self.app.post(
+            '/api/create',
+            json={
+                'prompt': 'a castle',
+                'image_url': 'https://example.com/castle.jpg',
+                'engine': 'world_labs',
+                'use_local_llm': False,
+                'world_model': 'marble-1.0-draft',
+                'seed': 42,
+            },
+            content_type='application/json',
+            headers={'X-API-Key': 'test-key'}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['success'])
+        self.assertEqual(data['task_id'], 'op-abc')
+
+        # 校验发到 World Labs 的 payload 符合 World API 规范
+        sent_payload = mock_post.call_args[1]['json']
+        self.assertEqual(sent_payload['model'], 'marble-1.0-draft')
+        self.assertEqual(sent_payload['seed'], 42)
+        wp = sent_payload['world_prompt']
+        self.assertEqual(wp['type'], 'image')
+        self.assertEqual(wp['image_prompt']['source'], 'uri')
+        self.assertEqual(wp['image_prompt']['uri'], 'https://example.com/castle.jpg')
+
+    @patch('routes.world.requests.post')
+    @patch('routes.world.llm_client.detect')
+    def test_create_world_text_format(self, mock_detect, mock_post):
+        """纯文字应使用 text_prompt 格式且默认模型正确"""
+        mock_detect.return_value = {'available': False}
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {'operation_id': 'op-xyz'}
+        mock_post.return_value = mock_resp
+
+        response = self.app.post(
+            '/api/create',
+            json={
+                'prompt': 'a fantasy forest',
+                'engine': 'world_labs',
+                'use_local_llm': False,
+            },
+            content_type='application/json',
+            headers={'X-API-Key': 'test-key'}
+        )
+        self.assertEqual(response.status_code, 200)
+
+        sent_payload = mock_post.call_args[1]['json']
+        wp = sent_payload['world_prompt']
+        self.assertEqual(wp['type'], 'text')
+        self.assertEqual(wp['text_prompt'], 'a fantasy forest')
+        self.assertEqual(sent_payload['model'], 'marble-1.1')  # 默认模型
 
 
 if __name__ == '__main__':
