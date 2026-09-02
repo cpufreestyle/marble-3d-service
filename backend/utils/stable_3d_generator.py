@@ -233,8 +233,10 @@ class Stable3DGenerator:
         dtype = torch.float16 if self.device == 'cuda' else torch.float32
         self.pipe = DiffusionPipeline.from_pretrained(
             model_id,
-            custom_pipeline='sudo-ai/zero123plus-v1.2',
+            # 管线代码在独立仓库（v1.2 权重仓库不含 pipeline.py）
+            custom_pipeline='sudo-ai/zero123plus-pipeline',
             torch_dtype=dtype,
+            trust_remote_code=True,
         )
         self.pipe = self.pipe.to(self.device)
         self._apply_common_optimizations()
