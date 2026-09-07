@@ -38,7 +38,7 @@ limiter.init_app(app)
 app.config['SECRET_KEY'] = os.environ.get(
     'SECRET_KEY', 'dev-secret-key-change-in-production'
 )
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
+app.config['MAX_CONTENT_LENGTH'] = 110 * 1024 * 1024  # 110MB（视频输入按 World API 规范最大 100MB）
 
 # 注册蓝图
 app.register_blueprint(world_bp, url_prefix='/api')

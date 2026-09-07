@@ -457,5 +457,94 @@ class TestWorldAPIUpgrade(unittest.TestCase):
         self.assertEqual(sent_payload['model'], 'marble-1.1')  # 默认模型
 
 
+class TestNewFeatures(unittest.TestCase):
+    """历史画廊 / 环绕视频 / 多模态输入测试"""
+
+    def setUp(self):
+        self.app = app.test_client()
+        self.app.testing = True
+        limiter.enabled = False
+
+    def test_history_empty(self):
+        """/api/history 正常返回（可能为空）"""
+        response = self.app.get('/api/history')
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['success'])
+        self.assertIn('entries', data)
+        self.assertIn('total', data)
+
+    def test_history_invalid_limit(self):
+        """非法 limit 返回 400"""
+        response = self.app.get('/api/history?limit=abc')
+        self.assertEqual(response.status_code, 400)
+
+    def test_orbit_video_invalid_views(self):
+        """视角数量不合法时环绕视频导出返回 400"""
+        response = self.app.post(
+            '/api/export-orbit-video',
+            json={'view_urls': []},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_orbit_video_bad_path(self):
+        """非 generated_3d_views/uploads 的路径返回 400"""
+        response = self.app.post(
+            '/api/export-orbit-video',
+            json={'view_urls': ['http://evil.com/a.png', '/generated_3d_views/x.png']},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_orbit_video_invalid_fps(self):
+        """fps 超范围返回 400"""
+        response = self.app.post(
+            '/api/export-orbit-video',
+            json={'view_urls': ['/generated_3d_views/a.png',
+                                '/generated_3d_views/b.png'],
+                  'fps': 99},
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+
+    @patch('routes.world.requests.post')
+    @patch('routes.world.llm_client.detect')
+    def test_multimodal_requires_api_key(self, mock_detect, mock_post):
+        """多图输入无 API Key 时返回 401"""
+        mock_detect.return_value = {'available': False}
+        from io import BytesIO
+        data = {
+            'prompt': 'a room',
+            'engine': 'world_labs',
+            'use_local_llm': 'false',
+            'images': [
+                (BytesIO(b'x'), f'i{n}.png', 'image/png') for n in range(3)
+            ],
+        }
+        response = self.app.post(
+            '/api/create', data=data, content_type='multipart/form-data'
+        )
+        self.assertEqual(response.status_code, 401)
+
+    @patch('routes.world.requests.post')
+    @patch('routes.world.llm_client.detect')
+    def test_multimodal_single_image_rejected(self, mock_detect, mock_post):
+        """多图模式只有 1 张图时返回 400"""
+        mock_detect.return_value = {'available': False}
+        from io import BytesIO
+        data = {
+            'prompt': 'a room',
+            'engine': 'world_labs',
+            'use_local_llm': 'false',
+            'images': [(BytesIO(b'x'), 'i0.png', 'image/png')],
+        }
+        response = self.app.post(
+            '/api/create', data=data, content_type='multipart/form-data',
+            headers={'X-API-Key': 'test-key'}
+        )
+        self.assertEqual(response.status_code, 400)
+
+
 if __name__ == '__main__':
     unittest.main()

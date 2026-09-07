@@ -81,3 +81,6 @@ D:\hf_cache
 # Codely CLI (local tooling config & memory)
 .codely-cli/
 CODELY.md
+
+# Runtime history data (user-generated)
+backend/data/

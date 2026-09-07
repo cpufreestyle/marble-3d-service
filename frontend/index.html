@@ -115,8 +115,15 @@
 
                 <!-- ===== 图片模式 ===== -->
                 <div class="mode-content" id="modeImage" role="tabpanel" aria-labelledby="tabImage">
-                    <div class="image-upload-area" id="uploadArea" aria-label="图片上传区域">
-                        <input type="file" id="imageInput" accept="image/*" aria-label="选择图片文件">
+                    <!-- 输入类型（多图/视频走 World Labs 引擎） -->
+                    <select id="inputTypeSelect" class="engine-select" style="margin-bottom:8px;" aria-label="选择素材输入类型">
+                        <option value="single" selected>📷 单张图片</option>
+                        <option value="multi">🖼️ 多张图片（2-8 张，重建效果更好）</option>
+                        <option value="video">🎬 视频（mp4/webm/mov，≤100MB）</option>
+                    </select>
+
+                    <div class="image-upload-area" id="uploadArea" aria-label="素材上传区域">
+                        <input type="file" id="imageInput" accept="image/*" aria-label="选择素材文件">
                         <div class="upload-icon">📷</div>
                         <div class="upload-hint">
                             点击或拖拽上传图片<br>
@@ -162,6 +169,15 @@
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- 生成历史画廊 -->
+        <div class="gallery" id="historySection" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                <h2 style="margin:0;">🗂️ 生成历史</h2>
+                <button class="btn btn-secondary" style="width:auto;padding:6px 14px;" onclick="loadHistory()">🔄 刷新</button>
+            </div>
+            <div class="gallery-grid" id="historyGrid"></div>
         </div>
 
         <!-- 示例画廊 -->

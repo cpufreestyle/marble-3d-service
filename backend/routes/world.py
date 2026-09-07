@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 import requests
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -23,6 +23,7 @@ from utils.smart_selector import SmartEngineSelector, GenerationEngine
 from utils.stable_3d_generator import Stable3DGenerator
 from utils.text_to_image import TextToImageGenerator
 from utils.local_llm import LocalLLMClient
+from utils import history_store
 from extensions import limiter
 
 # 加载环境变量
@@ -59,6 +60,8 @@ ATLAS_ENGINE_RESERVED = True
 # 上传目录（与 app.py 一致：项目根目录/uploads/）
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'uploads')
 Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+# Stable Zero123 多视角输出目录
+GENERATED_3D_DIR = os.path.join(os.path.dirname(__file__), '..', 'generated_3d_views')
 
 # 允许的图片扩展名
 ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
@@ -88,13 +91,16 @@ def get_asyncio_loop():
 
 # ===== 上传文件自动清理 =====
 def cleanup_old_uploads(max_age_hours=1):
-    """清理超过指定时长的上传文件"""
+    """清理超过指定时长的上传文件（历史画廊引用的文件豁免）"""
     now = datetime.now()
     cutoff = now - timedelta(hours=max_age_hours)
     cleaned = 0
     try:
+        referenced = history_store.referenced_files()
         for filepath in Path(UPLOAD_DIR).iterdir():
             if filepath.is_file():
+                if filepath.name in referenced:
+                    continue  # 画廊引用，跳过清理
                 mtime = datetime.fromtimestamp(filepath.stat().st_mtime)
                 if mtime < cutoff:
                     filepath.unlink()
@@ -195,6 +201,9 @@ def _parse_create_request():
         'world_model': '',
         'is_pano': '',
         'seed': None,
+        'image_files': [],
+        'video_file': None,
+        'reconstruct': False,
     }
 
     if request.content_type and 'multipart/form-data' in request.content_type:
@@ -212,6 +221,14 @@ def _parse_create_request():
         raw_seed = request.form.get('seed', '').strip()
         if raw_seed.isdigit():
             result['seed'] = int(raw_seed)
+        # 多模态输入（World Labs 专属）
+        result['image_files'] = [
+            f for f in request.files.getlist('images') if f and f.filename
+        ]
+        result['video_file'] = request.files.get('video')
+        result['reconstruct'] = (
+            request.form.get('reconstruct_images', 'true').lower() == 'true'
+        )
     elif request.is_json:
         data = request.get_json(silent=True) or {}
         result['prompt'] = data.get('prompt', '')
@@ -318,8 +335,8 @@ def _handle_stable_3d(image_to_process, final_prompt, backend=None):
         return None  # 降级
 
 
-def _upload_media_asset(file_path, api_key):
-    """将本地图片上传为 World Labs Media Asset（官方三步流程）。
+def _upload_media_asset(file_path, api_key, kind='image'):
+    """将本地图片/视频上传为 World Labs Media Asset（官方三步流程）。
 
     1. POST /media-assets:prepare_upload 获取 media_asset_id + 签名上传 URL
     2. PUT 文件字节到签名 URL（带 required_headers）
@@ -334,7 +351,7 @@ def _upload_media_asset(file_path, api_key):
     resp = requests.post(
         f'{API_URL}/media-assets:prepare_upload',
         headers=headers,
-        json={'file_name': file_name, 'extension': extension, 'kind': 'image'},
+        json={'file_name': file_name, 'extension': extension, 'kind': kind},
         timeout=30,
     )
     if resp.status_code != 200:
@@ -360,6 +377,110 @@ def _upload_media_asset(file_path, api_key):
 
     logger.info(f"Media Asset 上传成功: {media_asset_id}")
     return media_asset_id
+
+
+def _generate_world_multimodal(final_prompt, prompt, llm_used, api_key,
+                               image_files=None, video_file=None,
+                               reconstruct=False, world_model=None, seed=None):
+    """多图 / 视频输入生成世界（World API multi-image / video 模态）。
+
+    image_files: 2-8 个本地图片路径（方位角自动均分）
+    video_file:  本地视频路径
+    返回 (response_json, status_code)
+    """
+    headers = {
+        'WLT-Api-Key': api_key,
+        'Content-Type': 'application/json',
+    }
+    model = world_model if world_model in WORLD_LABS_MODELS else WORLD_LABS_MODEL
+
+    try:
+        if video_file:
+            media_asset_id = _upload_media_asset(video_file, api_key, kind='video')
+            world_prompt = {
+                'type': 'video',
+                'video_prompt': {
+                    'source': 'media_asset',
+                    'media_asset_id': media_asset_id,
+                },
+            }
+            if final_prompt:
+                world_prompt['text_prompt'] = final_prompt
+        else:
+            count = len(image_files)
+            step = 360 / count
+            items = []
+            for i, path in enumerate(image_files):
+                media_asset_id = _upload_media_asset(path, api_key, kind='image')
+                items.append({
+                    'content': {
+                        'source': 'media_asset',
+                        'media_asset_id': media_asset_id,
+                    },
+                    'azimuth': round(i * step, 1),
+                })
+            world_prompt = {
+                'type': 'multi-image',
+                'multi_image_prompt': items,
+                'reconstruct_images': bool(reconstruct),
+            }
+            if final_prompt:
+                world_prompt['text_prompt'] = final_prompt
+    except RuntimeError as e:
+        logger.error(f"Media Asset 上传失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 502
+
+    payload = {
+        'display_name': (final_prompt or 'Multi-image World')[:64] or 'My World',
+        'model': model,
+        'world_prompt': world_prompt,
+    }
+    if seed is not None:
+        payload['seed'] = seed
+
+    logger.info(
+        f"创建 3D 世界 (World Labs/{model}, "
+        f"{'video' if video_file else f'multi-image x{len(image_files)}'})"
+    )
+    response = requests.post(
+        f'{API_URL}/worlds:generate',
+        headers=headers,
+        json=payload,
+        timeout=30,
+    )
+    if response.status_code in [200, 201]:
+        result = response.json()
+        operation_id = result.get('operation_id')
+        logger.info(f"任务创建成功: task_id={operation_id}")
+        # 登记历史（轮询完成时回填）
+        try:
+            history_store.record(
+                kind='world',
+                prompt=prompt,
+                engine=f'world-labs ({model})',
+                status='processing',
+                task_id=operation_id,
+                payload={'model': model,
+                         'input_type': 'video' if video_file else 'multi-image'},
+            )
+        except Exception as he:
+            logger.warning(f"记录历史失败: {he}")
+        return jsonify({
+            'success': True,
+            'engine_used': f'world-labs ({model})',
+            'task_id': operation_id,
+            'status': 'processing',
+            'original_prompt': prompt,
+            'enhanced_prompt': final_prompt if final_prompt != prompt else None,
+            'llm_used': llm_used,
+        }), 200
+
+    logger.error(f"API 错误: {response.status_code} - {response.text[:200]}")
+    return jsonify({
+        'success': False,
+        'error': f'API 错误: {response.status_code}',
+        'details': response.text[:1000],
+    }), response.status_code
 
 
 def _handle_world_labs(final_prompt, prompt, llm_used, image_url,
@@ -439,6 +560,22 @@ def _handle_world_labs(final_prompt, prompt, llm_used, image_url,
     if response.status_code in [200, 201]:
         result = response.json()
         logger.info(f"任务创建成功: task_id={result.get('operation_id')}")
+        # 登记历史（轮询完成时回填 world 结果）
+        try:
+            history_store.record(
+                kind='world',
+                prompt=prompt,
+                engine=f'world-labs ({model})',
+                status='processing',
+                task_id=result.get('operation_id'),
+                payload={
+                    'image_url': image_url,
+                    'model': model,
+                },
+                files=[image_url] if (image_url and image_url.startswith('/uploads/')) else [],
+            )
+        except Exception as he:
+            logger.warning(f"记录历史失败: {he}")
         return jsonify({
             'success': True,
             'engine_used': f'world-labs ({model})',
@@ -546,6 +683,111 @@ def list_models():
         })
     except Exception as e:
         logger.error(f"获取模型列表失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@world_bp.route('/splat-ply/<world_id>', methods=['GET'])
+def get_splat_ply(world_id):
+    """代理下载世界的高斯点云 PLY（供网页 3D 查看器加载）。
+
+    内部流程：调用 :export（SPZ→PLY 转换，通常立即完成）→
+    拿到签名 URL → 流式转发 PLY 字节给前端（规避签名过期与跨域）。
+    """
+    try:
+        api_key = get_api_key_from_request() or API_KEY
+        if not api_key:
+            return jsonify({'success': False, 'error': '缺少 World Labs API Key'}), 401
+
+        headers = {
+            'WLT-Api-Key': api_key,
+            'Content-Type': 'application/json',
+        }
+        export_resp = requests.post(
+            f'{API_URL}/worlds/{world_id}:export',
+            headers=headers,
+            json={'asset_type': 'splats', 'format': 'ply',
+                  'resolution': 'full_res'},
+            timeout=60,
+        )
+        if export_resp.status_code != 200:
+            return jsonify({
+                'success': False,
+                'error': f'导出失败: HTTP {export_resp.status_code}',
+            }), export_resp.status_code
+
+        operation = export_resp.json()
+        download_url = (operation.get('response') or {}).get('url')
+
+        # PLY 转换通常立即完成；未完成则轮询 operation（最多 ~120s）
+        waited = 0
+        while not download_url and not operation.get('done') and waited < 120:
+            time.sleep(3)
+            waited += 3
+            op_resp = requests.get(
+                f'{API_URL}/operations/{operation.get("operation_id")}',
+                headers={'WLT-Api-Key': api_key},
+                timeout=30,
+            )
+            if op_resp.status_code == 200:
+                operation = op_resp.json()
+                download_url = (operation.get('response') or {}).get('url')
+
+        if not download_url:
+            return jsonify({
+                'success': False, 'error': 'PLY 导出超时，请稍后重试'
+            }), 504
+
+        # 流式转发 PLY 字节
+        upstream = requests.get(download_url, stream=True, timeout=120)
+        if upstream.status_code != 200:
+            return jsonify({
+                'success': False,
+                'error': f'PLY 下载失败: HTTP {upstream.status_code}',
+            }), 502
+
+        def stream():
+            for chunk in upstream.iter_content(chunk_size=1024 * 256):
+                if chunk:
+                    yield chunk
+
+        return Response(
+            stream(),
+            content_type='application/octet-stream',
+            headers={'Content-Disposition':
+                     f'inline; filename="{world_id}.ply"'},
+        )
+    except Exception as e:
+        logger.error(f"PLY 代理失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@world_bp.route('/history', methods=['GET'])
+def get_history():
+    """分页获取生成历史"""
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+        offset = max(int(request.args.get('offset', 0)), 0)
+    except ValueError:
+        return jsonify({'success': False, 'error': 'limit/offset 必须是整数'}), 400
+    try:
+        data = history_store.list_entries(limit=limit, offset=offset)
+        return jsonify({'success': True, **data})
+    except Exception as e:
+        logger.error(f"获取历史失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@world_bp.route('/history/<entry_id>', methods=['DELETE'])
+def delete_history(entry_id):
+    """删除一条历史记录（默认同时删除其引用的生成文件）"""
+    try:
+        delete_files = request.args.get('delete_files', 'true').lower() != 'false'
+        removed = history_store.delete_entry(entry_id, delete_files=delete_files)
+        if not removed:
+            return jsonify({'success': False, 'error': '记录不存在'}), 404
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"删除历史失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -659,6 +901,22 @@ def generate_image():
         )
 
         if result.get('success'):
+            # 记录生成历史（画廊用）
+            try:
+                history_store.record(
+                    kind='t2i',
+                    prompt=result.get('prompt', ''),
+                    engine=result.get('model', ''),
+                    payload={
+                        'image_url': result.get('image_url'),
+                        'size': result.get('size'),
+                        'generation_time': result.get('generation_time'),
+                        'model': result.get('model'),
+                    },
+                    files=[result.get('image_url') or ''],
+                )
+            except Exception as he:
+                logger.warning(f"记录历史失败: {he}")
             return jsonify(result), 200
         else:
             return jsonify(result), 500
@@ -684,6 +942,75 @@ def create_world():
         image_file = params['image_file']
         image_url = params['image_url']
         saved_filepath = None  # 跟踪保存的文件路径
+
+        # ========== 1.5 多模态输入（多图 / 视频，走 World Labs） ==========
+        if params['image_files'] or params['video_file']:
+            api_key_early = get_api_key_from_request() or API_KEY
+            if not api_key_early:
+                return jsonify({
+                    'success': False,
+                    'error': '多图/视频输入需要 World Labs API Key（X-API-Key 或 .env）'
+                }), 401
+
+            if not prompt and not params['image_files'] and not params['video_file']:
+                return jsonify({
+                    'success': False, 'error': '请输入提示词或上传素材'
+                }), 400
+
+            saved_paths = []
+            if params['video_file']:
+                video = params['video_file']
+                ext = os.path.splitext(video.filename)[1].lstrip('.').lower()
+                if ext not in ('mp4', 'webm', 'mov', 'avi'):
+                    return jsonify({
+                        'success': False,
+                        'error': '视频仅支持 mp4/webm/mov/avi 格式'
+                    }), 400
+                video.stream.seek(0)
+                vpath = os.path.join(
+                    UPLOAD_DIR, f"video_{uuid.uuid4().hex[:12]}.{ext}"
+                )
+                video.save(vpath)
+                saved_paths = [vpath]
+            else:
+                if not (2 <= len(params['image_files']) <= 8):
+                    return jsonify({
+                        'success': False,
+                        'error': '多图模式需要 2-8 张图片'
+                    }), 400
+                for img in params['image_files']:
+                    is_valid, error_msg = validate_image_file(img)
+                    if not is_valid:
+                        return jsonify({
+                            'success': False, 'error': f'{img.filename}: {error_msg}'
+                        }), 400
+                    img.stream.seek(0)
+                    ext = os.path.splitext(img.filename)[1].lower() or '.png'
+                    ipath = os.path.join(
+                        UPLOAD_DIR, f"multi_{uuid.uuid4().hex[:12]}{ext}"
+                    )
+                    img.save(ipath)
+                    saved_paths.append(ipath)
+
+            # ========== 本地 LLM 优化提示词 ==========
+            final_prompt, llm_used = _enhance_prompt(
+                prompt, use_local_llm, llm_model=params['llm_model']
+            )
+
+            if params['video_file']:
+                return _generate_world_multimodal(
+                    final_prompt, prompt, llm_used, api_key_early,
+                    video_file=saved_paths[0],
+                    world_model=params['world_model'] or None,
+                    seed=params['seed'],
+                )
+            return _generate_world_multimodal(
+                final_prompt, prompt, llm_used, api_key_early,
+                image_files=saved_paths,
+                reconstruct=params['reconstruct'],
+                world_model=params['world_model'] or None,
+                seed=params['seed'],
+            )
 
         # 处理上传图片
         if image_file and image_file.filename:
@@ -736,6 +1063,25 @@ def create_world():
                 )
                 resp_data['llm_used'] = llm_used
                 resp_data['image_url'] = image_url
+                # 记录生成历史（画廊用）
+                try:
+                    stable_result = resp_data.get('result', {})
+                    history_store.record(
+                        kind='three_d',
+                        prompt=prompt,
+                        engine=stable_result.get('backend', 'stable-zero123'),
+                        payload={
+                            'image_url': image_url,
+                            'view_urls': stable_result.get('view_urls', []),
+                            'backend': stable_result.get('backend'),
+                            'view_count': stable_result.get('view_count'),
+                            'generation_time': stable_result.get('generation_time'),
+                        },
+                        files=(stable_result.get('view_urls') or [])
+                        + ([image_url] if image_url else []),
+                    )
+                except Exception as he:
+                    logger.warning(f"记录历史失败: {he}")
                 return jsonify(resp_data), result['status_code']
             # result is None → 降级到 World Labs
             selected_engine = GenerationEngine.WORLD_LABS
@@ -815,6 +1161,96 @@ def get_credits():
         })
     except Exception as e:
         logger.error(f"查询 credits 失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@world_bp.route('/export-orbit-video', methods=['POST'])
+@limiter.limit("10 per minute")
+def export_orbit_video():
+    """把多视角图片合成为环绕展示视频（ping-pong mp4）
+
+    请求体: {view_urls: ['/generated_3d_views/view_x.png', ...], fps?: 8, hold?: 2}
+    返回: {success, video_url}
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        view_urls = data.get('view_urls') or []
+        if not isinstance(view_urls, list) or not (2 <= len(view_urls) <= 16):
+            return jsonify({
+                'success': False,
+                'error': 'view_urls 必须是 2-16 个视角图片路径的数组'
+            }), 400
+        try:
+            fps = int(data.get('fps') or 8)
+            hold = int(data.get('hold') or 2)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'fps/hold 必须是整数'}), 400
+        if not (4 <= fps <= 30) or not (1 <= hold <= 6):
+            return jsonify({
+                'success': False, 'error': 'fps 取值 [4,30]，hold 取值 [1,6]'
+            }), 400
+
+        import imageio.v2 as imageio
+
+        # 按序读取视角（支持 /generated_3d_views/ 与 /uploads/ 相对路径）
+        frames = []
+        for rel in view_urls:
+            rel = (rel or '').lstrip('/')
+            if rel.startswith('generated_3d_views/'):
+                path = os.path.join(GENERATED_3D_DIR, rel[len('generated_3d_views/'):])
+            elif rel.startswith('uploads/'):
+                path = os.path.join(UPLOAD_DIR, rel[len('uploads/'):])
+            elif rel.startswith('/uploads/'):
+                path = os.path.join(UPLOAD_DIR, rel[len('/uploads/'):])
+            else:
+                return jsonify({
+                    'success': False, 'error': f'不支持的视频帧路径: {rel}'
+                }), 400
+            if not os.path.exists(path):
+                return jsonify({
+                    'success': False, 'error': f'视角文件不存在: {rel}'
+                }), 404
+            frames.append(imageio.imread(path))
+
+        # ping-pong 序列（正向 + 回放，循环播放无跳变），每视角停留 hold 帧
+        sequence = frames + frames[-2:0:-1]
+        tiled = []
+        for img in sequence:
+            tiled.extend([img] * hold)
+
+        filename = f"orbit_{uuid.uuid4().hex[:12]}.mp4"
+        filepath = os.path.join(UPLOAD_DIR, filename)
+        imageio.mimwrite(filepath, tiled, fps=fps, codec='libx264',
+                         quality=8, pixelformat='yuv420p')
+
+        video_url = f"/uploads/{filename}"
+        logger.info(f"环绕视频合成完成: {filename} ({len(tiled)} 帧)")
+        try:
+            history_store.record(
+                kind='orbit_video',
+                prompt='环绕视频导出',
+                engine='imageio',
+                payload={'video_url': video_url, 'view_urls': view_urls,
+                         'frames': len(tiled), 'fps': fps},
+                files=[video_url],
+            )
+        except Exception as he:
+            logger.warning(f"记录历史失败: {he}")
+
+        return jsonify({
+            'success': True,
+            'video_url': video_url,
+            'frames': len(tiled),
+            'fps': fps,
+            'duration': round(len(tiled) / fps, 2),
+        })
+    except ImportError as e:
+        return jsonify({
+            'success': False,
+            'error': f'缺少视频合成依赖 (imageio/ffmpeg): {e}'
+        }), 503
+    except Exception as e:
+        logger.error(f"环绕视频合成失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -955,6 +1391,21 @@ def get_task_status(task_id):
                 pano = imagery.get('pano_url', '')
 
                 logger.info(f"任务完成: task_id={task_id}")
+                # 回填历史记录（世界结果）
+                try:
+                    history_store.update_by_task_id(task_id, {
+                        'status': 'completed',
+                        'payload': {
+                            'world_id': world_data.get('world_id', ''),
+                            'world_url': world_data.get('world_marble_url', ''),
+                            'preview_url': thumb or pano,
+                            'pano_url': pano,
+                            'thumbnail_url': thumb,
+                            'caption': assets.get('caption', ''),
+                        },
+                    })
+                except Exception as he:
+                    logger.warning(f"回填历史失败: {he}")
                 return jsonify({
                     'success': True,
                     'status': 'completed',

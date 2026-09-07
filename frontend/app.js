@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
     await checkLlmStatus();
     loadModels();
+    loadHistory();
     initImageUpload();
 });
 
@@ -102,6 +103,100 @@ async function loadModels() {
         });
     } catch (e) {
         console.error('Load models failed:', e);
+    }
+}
+
+// ===== 生成历史画廊 =====
+async function loadHistory() {
+    try {
+        const response = await fetch(API_BASE + '/history?limit=60');
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!data.success) return;
+
+        const section = document.getElementById('historySection');
+        const grid = document.getElementById('historyGrid');
+        const entries = data.entries || [];
+        if (!entries.length) {
+            section.style.display = 'none';
+            return;
+        }
+        section.style.display = 'block';
+
+        const kindLabels = { t2i: '🎨 文生图', three_d: '🧊 3D 多视角', world: '🌍 3D 世界' };
+        grid.innerHTML = entries.map(function (e) {
+            const p = e.payload || {};
+            let thumb = '';
+            if (e.kind === 't2i' && p.image_url) thumb = p.image_url;
+            else if (e.kind === 'three_d' && (p.view_urls || [])[0]) thumb = p.view_urls[0];
+            else if (p.thumbnail_url || p.preview_url) thumb = p.thumbnail_url || p.preview_url;
+            const thumbSrc = thumb
+                ? (thumb.startsWith('http') ? thumb : window.location.origin + '/' + thumb.replace(/^\/+/, ''))
+                : '';
+            const thumbHtml = thumbSrc
+                ? '<img src="' + escapeAttr(thumbSrc) + '" loading="lazy" onerror="this.style.display=\'none\'">'
+                : '<div style="font-size:1.6rem;padding:24px 0;">' + (kindLabels[e.kind] || '📄') + '</div>';
+            const statusMark = e.status === 'processing' ? ' ⏳' : '';
+            return '<div class="gallery-item" style="position:relative;" ' +
+                'onclick="openHistoryItem(\'' + escapeAttr(e.id) + '\')" role="button" tabindex="0">' +
+                '<div class="preview" style="background:#000;overflow:hidden;">' + thumbHtml + '</div>' +
+                '<div class="gallery-item-info"><p title="' + escapeAttr(e.prompt || '') + '">' +
+                escapeHtml((e.prompt || kindLabels[e.kind] || e.kind).slice(0, 30)) +
+                '</p><p style="font-size:0.65rem;color:#666;">' +
+                (kindLabels[e.kind] || e.kind) + statusMark + ' · ' + escapeHtml(e.created_at || '') + '</p></div>' +
+                '<button onclick="event.stopPropagation();deleteHistoryItem(\'' + escapeAttr(e.id) + '\')" ' +
+                'aria-label="删除历史" style="position:absolute;top:6px;right:6px;background:rgba(255,0,0,0.7);' +
+                'border:none;border-radius:50%;width:22px;height:22px;color:#fff;cursor:pointer;font-size:0.8rem;">×</button>' +
+                '</div>';
+        }).join('');
+    } catch (e) {
+        console.error('Load history failed:', e);
+    }
+}
+
+function openHistoryItem(id) {
+    fetch(API_BASE + '/history?limit=200')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            const entry = (data.entries || []).find(function (e) { return e.id === id; });
+            if (!entry) return;
+            const p = entry.payload || {};
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            if (entry.kind === 't2i' && p.image_url) {
+                showPlaceholder();
+                document.getElementById('resultArea').innerHTML =
+                    '<div class="pano-container" style="aspect-ratio:1;max-height:420px;">' +
+                    '<img src="' + escapeAttr(p.image_url.startsWith('http') ? p.image_url :
+                        window.location.origin + p.image_url) + '" style="width:100%;height:100%;object-fit:contain;">' +
+                    '</div>' +
+                    '<p style="color:#888;font-size:0.75rem;margin-top:8px;">' + escapeHtml(entry.prompt || '') + '</p>';
+            } else if (entry.kind === 'three_d' && (p.view_urls || []).length) {
+                showResult({ view_urls: p.view_urls, backend: p.backend,
+                             view_count: p.view_count, generation_time: p.generation_time,
+                             message: '历史记录 · ' + (entry.prompt || '') });
+            } else if (entry.kind === 'world') {
+                if (p.world_url || p.preview_url) {
+                    showResult({ world_url: p.world_url, preview_url: p.preview_url || p.thumbnail_url,
+                                 pano_url: p.pano_url, thumbnail_url: p.thumbnail_url,
+                                 caption: p.caption || entry.prompt, world_id: p.world_id });
+                } else {
+                    showToast('⏳ 该任务未完成（可能已过期）', true);
+                }
+            }
+        })
+        .catch(function (e) { console.error('Open history failed:', e); });
+}
+
+async function deleteHistoryItem(id) {
+    if (!confirm('删除这条历史记录及其生成文件？')) return;
+    try {
+        const response = await fetch(API_BASE + '/history/' + encodeURIComponent(id),
+                                     { method: 'DELETE', headers: getAuthHeaders() });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        showToast('🗑️ 已删除');
+        loadHistory();
+    } catch (e) {
+        showToast('⚠️ 删除失败: ' + e.message, true);
     }
 }
 
@@ -162,8 +257,17 @@ function initImageUpload() {
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('imageInput');
 
+    document.getElementById('inputTypeSelect').addEventListener('change', function (e) {
+        setInputType(e.target.value);
+    });
+
     fileInput.addEventListener('change', function (e) {
-        if (e.target.files && e.target.files[0]) {
+        if (!e.target.files || !e.target.files.length) return;
+        if (inputType === 'multi') {
+            uploadedImageFiles = [];
+            Array.from(e.target.files).forEach(handleImageFile);
+            if (!uploadedImageFiles.length) removeImage();
+        } else {
             handleImageFile(e.target.files[0]);
         }
     });
@@ -184,16 +288,88 @@ function initImageUpload() {
         e.preventDefault();
         e.stopPropagation();
         uploadArea.classList.remove('drag-over');
-        var file = e.dataTransfer.files[0];
-        if (file && file.type.startsWith('image/')) {
-            handleImageFile(file);
+        var files = Array.from(e.dataTransfer.files);
+        if (inputType === 'multi') {
+            uploadedImageFiles = [];
+            files.forEach(handleImageFile);
+            if (!uploadedImageFiles.length) {
+                showToast('⚠️ 请上传图片文件', true);
+                removeImage();
+            }
+        } else if (files[0] && (files[0].type.startsWith('image/') ||
+                   (inputType === 'video' && files[0].type.startsWith('video/')))) {
+            handleImageFile(files[0]);
         } else {
             showToast('⚠️ 请上传图片文件', true);
         }
     });
 }
 
+// ===== 素材输入类型（单图 / 多图 / 视频） =====
+var inputType = 'single';
+var uploadedImageFiles = [];  // 多图模式
+var uploadedVideoFile = null; // 视频模式
+
+function setInputType(type) {
+    inputType = type;
+    const input = document.getElementById('imageInput');
+    const icon = document.querySelector('#uploadArea .upload-icon');
+    const hint = document.querySelector('#uploadArea .upload-hint span');
+    if (type === 'multi') {
+        input.multiple = true;
+        input.accept = 'image/*';
+        icon.textContent = '🖼️';
+        hint.textContent = '选择 2-8 张同一场景的图片（世界重建效果更好，走 World Labs）';
+    } else if (type === 'video') {
+        input.multiple = false;
+        input.accept = 'video/mp4,video/webm,video/quicktime,video/x-msvideo';
+        icon.textContent = '🎬';
+        hint.textContent = '选择视频文件（mp4 / webm / mov，≤100MB，走 World Labs）';
+    } else {
+        input.multiple = false;
+        input.accept = 'image/*';
+        icon.textContent = '📷';
+        hint.textContent = '支持 JPG / PNG / WEBP，最大 10MB';
+    }
+    removeImage();
+}
+
 function handleImageFile(file) {
+    if (inputType === 'video') {
+        if (file.size > 100 * 1024 * 1024) {
+            showToast('⚠️ 视频不能超过 100MB', true);
+            return;
+        }
+        uploadedVideoFile = file;
+        uploadedImageFiles = [];
+        uploadedImageFile = null;
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (!['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
+            showToast('⚠️ 视频仅支持 mp4 / webm / mov / avi', true);
+            return;
+        }
+        showImagePreview('🎬 ' + file.name + '（' + (file.size / 1024 / 1024).toFixed(1) + 'MB）');
+        return;
+    }
+
+    if (inputType === 'multi') {
+        if (file.size > 10 * 1024 * 1024) {
+            showToast('⚠️ 单张图片不能超过 10MB', true);
+            return;
+        }
+        var ext2 = file.name.split('.').pop().toLowerCase();
+        if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext2)) {
+            showToast('⚠️ 只支持 JPG / PNG / WEBP 格式', true);
+            return;
+        }
+        uploadedImageFiles.push(file);
+        uploadedImageFile = null;
+        uploadedVideoFile = null;
+        showImagePreview('已选 ' + uploadedImageFiles.length + ' 张图片');
+        return;
+    }
+
+    // 单图模式（原逻辑）
     if (file.size > 10 * 1024 * 1024) {
         showToast('⚠️ 图片不能超过 10MB', true);
         return;
@@ -204,6 +380,8 @@ function handleImageFile(file) {
         return;
     }
     uploadedImageFile = file;
+    uploadedImageFiles = [];
+    uploadedVideoFile = null;
     var reader = new FileReader();
     reader.onload = function (e) {
         document.getElementById('previewImg').src = e.target.result;
@@ -216,10 +394,30 @@ function handleImageFile(file) {
     reader.readAsDataURL(file);
 }
 
+function showImagePreview(text) {
+    document.getElementById('previewImg').style.display = 'none';
+    document.getElementById('imagePreviewBox').style.display = 'block';
+    let info = document.getElementById('multiImageInfo');
+    if (!info) {
+        info = document.createElement('div');
+        info.id = 'multiImageInfo';
+        info.style.cssText = 'font-size:0.75rem;color:#aaa;margin-top:6px;';
+        document.getElementById('imagePreviewBox').appendChild(info);
+    }
+    info.textContent = text;
+    document.getElementById('uploadArea').style.display = 'none';
+}
+
 function removeImage() {
     uploadedImageFile = null;
+    uploadedImageFiles = [];
+    uploadedVideoFile = null;
     document.getElementById('imageInput').value = '';
     document.getElementById('imagePreviewBox').style.display = 'none';
+    const pv = document.getElementById('previewImg');
+    if (pv) { pv.style.display = 'block'; pv.src = ''; }
+    const info = document.getElementById('multiImageInfo');
+    if (info) info.textContent = '';
     document.getElementById('uploadArea').style.display = 'block';
 }
 
@@ -350,6 +548,7 @@ function showResult(data) {
         actionButtons += '<button class="btn btn-secondary" onclick="window.open(\'' + escapeAttr(data.pano_url) + '\', \'_blank\')">🖼️ 全景图</button>';
     }
     if (currentWorldId) {
+        actionButtons += '<button class="btn btn-secondary" onclick="openSplatViewer(\'' + escapeAttr(currentWorldId) + '\')">🧊 网页查看 3D</button>';
         actionButtons += '<button class="btn btn-secondary" onclick="exportWorld(\'' + escapeAttr(currentWorldId) + '\')">📦 导出 PLY 点云</button>';
     }
     actionButtons += '<button class="btn btn-secondary" onclick="copyLink()">📋 复制链接</button>';
@@ -377,6 +576,8 @@ function showResult(data) {
         var placeholderDiv = area.querySelector('.pano-container > div');
         if (placeholderDiv) placeholderDiv.remove();
     }
+    // 结果落定后刷新历史画廊
+    loadHistory();
 }
 
 // ===== Stable Zero123 多视角结果展示 =====
@@ -439,6 +640,7 @@ function showStable3DResult(data) {
         '<button class="btn btn-primary" onclick="open3DViewer()">🌐 全屏 3D 预览</button>' +
         '<button class="btn btn-secondary" onclick="autoRotate3D()" id="rotateBtn">🔄 自动旋转</button>' +
         '<button class="btn btn-secondary" onclick="downloadAllViews()">📥 下载所有视角</button>' +
+        '<button class="btn btn-secondary" onclick="exportOrbitVideo()">🎥 环绕视频</button>' +
         '<button class="btn btn-secondary" onclick="copyLink()">📋 复制链接</button>' +
         '</div>';
 }
@@ -506,6 +708,40 @@ function downloadAllViews() {
     showToast('📥 开始下载所有视角...');
 }
 
+// ===== 6 视角合成环绕视频 =====
+async function exportOrbitVideo() {
+    if (!current3DViews.length) {
+        showToast('⚠️ 没有可用的视角图片', true);
+        return;
+    }
+    showToast('🎥 正在合成环绕视频...');
+    try {
+        var response = await fetch(API_BASE + '/export-orbit-video', {
+            method: 'POST',
+            headers: Object.assign(
+                { 'Content-Type': 'application/json' }, getAuthHeaders()
+            ),
+            body: JSON.stringify({ view_urls: current3DViews, fps: 8, hold: 2 })
+        });
+        if (!response.ok) {
+            var errData = null;
+            try { errData = await response.json(); } catch (e) { /* ignore */ }
+            throw new Error((errData && errData.error) || 'HTTP ' + response.status);
+        }
+        var data = await response.json();
+        if (data.success && data.video_url) {
+            showResult({ video_url: data.video_url,
+                         message: '环绕视频 · ' + data.frames + ' 帧 @ ' + data.fps + 'fps' });
+            showToast('🎥 环绕视频合成完成');
+        } else {
+            throw new Error(data.error || '合成失败');
+        }
+    } catch (error) {
+        console.error('Orbit video failed:', error);
+        showToast('⚠️ 环绕视频合成失败: ' + error.message, true);
+    }
+}
+
 function showError(message) {
     var safeMsg = escapeHtml(message);
     document.getElementById('resultArea').innerHTML =
@@ -557,6 +793,12 @@ async function exportWorld(worldId) {
         console.error('Export failed:', error);
         showToast('⚠️ 导出失败: ' + error.message, true);
     }
+}
+
+// ===== 网页内 3D 查看器（Gaussian Splats） =====
+function openSplatViewer(worldId) {
+    window.open('/splat-viewer.html?world=' + encodeURIComponent(worldId),
+                '_blank', 'width=1280,height=800');
 }
 
 // ===== AI 生成图片 =====
@@ -614,6 +856,7 @@ async function generateImageFromText() {
             if (data.size) infoText += '  |  🖼 ' + data.size;
             document.getElementById('aiImageInfo').textContent = infoText;
 
+            loadHistory();
             showToast('✅ AI 图片生成完成！点击"开始生成"创建 3D');
         } else {
             throw new Error(data.error || '生成失败');
@@ -644,14 +887,23 @@ async function generateWorld() {
         showToast('⚠️ 请输入提示词', true);
         return;
     }
-    if (mode === 'image' && !uploadedImageFile) {
-        showToast('⚠️ 请上传图片', true);
+    if (mode === 'image' && !uploadedImageFile && !uploadedImageFiles.length
+        && !uploadedVideoFile) {
+        showToast('⚠️ 请上传图片或视频', true);
         return;
     }
 
     var engineChoice = document.getElementById('engineSelect')
         ? document.getElementById('engineSelect').value
         : 'auto';
+
+    // 多图 / 视频输入仅 World Labs 引擎支持，自动切换
+    var usingMultimodal = (mode === 'image')
+        && (uploadedImageFiles.length >= 2 || uploadedVideoFile);
+    if (usingMultimodal && engineChoice !== 'world_labs') {
+        engineChoice = 'world_labs';
+        showToast('ℹ️ 多图/视频输入已自动切换到 World Labs 引擎');
+    }
 
     // 文字模式下，Stable Zero123 / 自动选择引擎需要图片输入；
     // 选择 World Labs 时可直接用纯文字生成
@@ -702,6 +954,18 @@ async function generateWorld() {
 
         if (mode === 'image' && uploadedImageFile) {
             formData.append('image', uploadedImageFile);
+        }
+
+        // 多图 / 视频输入（World Labs 引擎）
+        if (mode === 'image' && usingMultimodal) {
+            if (uploadedVideoFile) {
+                formData.append('video', uploadedVideoFile);
+            } else {
+                uploadedImageFiles.forEach(function (f) {
+                    formData.append('images', f);
+                });
+                formData.append('reconstruct_images', 'true');
+            }
         }
 
         // 文字模式：如果有 AI 生成的图片，传递 URL

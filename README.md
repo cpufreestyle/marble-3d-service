@@ -554,6 +554,22 @@ flake8 backend/
 
 ---
 
+## ✨ 进阶功能
+
+### 生成历史画廊
+每次成功的生成（文生图 / 3D 多视角 / World Labs 世界）自动记录到 `backend/data/history.json`（上限 500 条），前端「🗂️ 生成历史」区块可浏览缩略图、点击重开、删除（删除时会清理其引用的生成文件；被历史引用的文件不会被 1 小时清理线程误删）。
+
+### 环绕视频导出
+zero123plus 生成 6 视角后，结果区「🎥 环绕视频」按钮可将视角 ping-pong 合成循环展示 mp4（`POST /api/export-orbit-video`，fps 4-30 / hold 1-6 可调），依赖 `imageio` + `imageio-ffmpeg`。
+
+### 多图 / 视频输入（World Labs 引擎）
+图片模式支持三种素材类型：**单张图片** / **多张图片（2-8 张，自动分配方位角，`reconstruct_images` 重建模式）/ **视频**（mp4/webm/mov/avi，≤100MB，请求体积上限已调至 110MB）。多图与视频走 World Labs 引擎（`multi-image` / `video` 模态），素材经 media asset 三步上传。选择多图/视频时会自动切换到 World Labs 引擎。
+
+### 网页内 3D 查看器
+World Labs 世界生成完成后，结果区「🧊 网页查看 3D」按钮打开 `splat-viewer.html`（three.js + GaussianSplats3D），后端 `GET /api/splat-ply/<world_id>` 代理导出并流式转发 PLY 点云，浏览器内直接漫游高斯点云，无需第三方工具。
+
+---
+
 ## 🌍 World API 与 Atlas
 
 本项目基于 World Labs 的 **World API**（Marble 公开 API，`docs.worldlabs.ai`）：
